@@ -46,7 +46,7 @@ class DicomViewer(QMainWindow):
         load_button.clicked.connect(self.load_dicom)
 
         remove_button = QPushButton("Remove Current Layer")
-        # remove_button.clicked.connect(self.remove_current_layer)
+        remove_button.clicked.connect(self.remove_current_layer)
 
         self.toggle_visibility_button = QPushButton("Hide Current Layer")
         # self.toggle_visibility_button.clicked.connect(self.toggle_current_layer_visibility)
@@ -57,7 +57,7 @@ class DicomViewer(QMainWindow):
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(0)
         self.slice_slider.setValue(0)
-        # self.slice_slider.valueChanged.connect(self.on_slice_change)
+        self.slice_slider.valueChanged.connect(self.on_slice_change)
 
         # Rotation sliders
         self.rotation_sliders = []
@@ -111,27 +111,69 @@ class DicomViewer(QMainWindow):
         self.volume_layers.append(layer)
         self.layer_list.addItem(layer.name)
 
-        # Setup opacity and slice offset sliders
-        opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        opacity_slider.setMinimum(1)
-        opacity_slider.setMaximum(100)
+        opacity_slider = self._extracted_from_load_dicom_15()
+        self._extracted_from_load_dicom_18(opacity_slider, 100, 'Opacity: ', layer)
+        slice_offset_slider = self._extracted_from_load_dicom_19(volume)
+        self._extracted_from_load_dicom_18(
+            slice_offset_slider, 0, 'Slice Offset: ', layer
+        )
+        self.selected_layer_index = len(self.volume_layers) - 1
+        self.update_rotation_sliders()
+
+        opacity_slider = self._extracted_from_load_dicom_15()
         opacity_slider.setValue(100)
         # opacity_slider.valueChanged.connect(lambda val, layer=layer: self.update_opacity(layer, val))
         self.slider_container.addWidget(QLabel(f"Opacity: {layer.name}"))
         self.slider_container.addWidget(opacity_slider)
 
-        slice_offset_slider = QSlider(Qt.Orientation.Horizontal)
-        slice_offset_slider.setMinimum(-volume.shape[0] + 1)
-        slice_offset_slider.setMaximum(volume.shape[0] - 1)
+        slice_offset_slider = self._extracted_from_load_dicom_19(volume)
         slice_offset_slider.setValue(0)
+        slice_offset_slider.setSingleStep(1)
         # slice_offset_slider.valueChanged.connect(lambda val, layer=layer: self.update_slice_offset(layer, val))
         self.slider_container.addWidget(QLabel(f"Slice Offset: {layer.name}"))
         self.slider_container.addWidget(slice_offset_slider)
 
-        self.selected_layer_index = len(self.volume_layers) - 1
-        self.update_rotation_sliders()
         self.update_global_slice_slider_range()
         self.update_display()
+
+    # TODO Rename this here and in `load_dicom`
+    def _extracted_from_load_dicom_15(self):
+        # Setup opacity and slice offset sliders
+        result = QSlider(Qt.Orientation.Horizontal)
+        result.setMinimum(1)
+        result.setMaximum(100)
+        return result
+
+    # TODO Rename this here and in `load_dicom`
+    def _extracted_from_load_dicom_19(self, volume):
+        result = QSlider(Qt.Orientation.Horizontal)
+        result.setMinimum(-volume.shape[0] + 1)
+        result.setMaximum(volume.shape[0] - 1)
+        return result
+
+    def update_opacity(self, layer, value):
+        layer.opacity = value / 100.0
+        self.update_display()
+
+    def update_slice_offset(self, layer, value):
+        layer.slice_offset = value
+        self.update_global_slice_slider_range()
+        self.update_display()
+
+    def update_rotation(self, axis_index, value):
+        if self.selected_layer_index is None:
+            return
+        layer = self.volume_layers[self.selected_layer_index]
+        layer.rotation[axis_index] = value
+        layer.cached_rotated_volume = None
+        self.update_display()
+
+    # TODO Rename this here and in `load_dicom`
+    def _extracted_from_load_dicom_18(self, arg0, arg1, arg2, layer):
+        arg0.setValue(arg1)
+        # opacity_slider.valueChanged.connect(lambda val, layer=layer: self.update_opacity(layer, val))
+        self.slider_container.addWidget(QLabel(f"{arg2}{layer.name}"))
+        self.slider_container.addWidget(arg0)
 
     def select_layer(self, index):
         self.selected_layer_index = index
@@ -145,5 +187,81 @@ class DicomViewer(QMainWindow):
         scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.AspectRatioMode.KeepAspectRatio)
         self.scene.clear()
         self.scene.addPixmap(scaled_pixmap)
+
+    def update_rotation_sliders(self):
+        if self.selected_layer_index is None:
+            for slider in self.rotation_sliders:
+                slider.blockSignals(True)
+                slider.setValue(0)
+                slider.blockSignals(False)
+            return
+        layer = self.volume_layers[self.selected_layer_index]
+        for i in range(3):
+            self.rotation_sliders[i].blockSignals(True)
+            self.rotation_sliders[i].setValue(layer.rotation[i])
+            self.rotation_sliders[i].blockSignals(False)
+
+    def update_global_slice_slider_range(self):
+        if not self.volume_layers:
+            self.slice_slider.setMinimum(0)
+            self.slice_slider.setMaximum(0)
+            self.global_slice_offset = 0
+            return
+
+        min_index = min(0 + l.slice_offset for l in self.volume_layers)
+        max_index = max((l.data.shape[0] - 1) + l.slice_offset for l in self.volume_layers)
+
+        self.global_slice_offset = -min_index
+        slider_min = 0
+        slider_max = max_index - min_index
+
+        self.slice_slider.setMinimum(slider_min)
+        self.slice_slider.setMaximum(slider_max)
+
+        if not (slider_min <= self.slice_slider.value() <= slider_max):
+            self.slice_slider.setValue(slider_min)
+
+        self.slice_index = self.slice_slider.value() - self.global_slice_offset
+
+    def select_layer(self, index):
+        if 0 <= index < len(self.volume_layers):
+            self.selected_layer_index = index
+        else:
+            self.selected_layer_index = None
+        self.update_rotation_sliders()
+        self.update_display()
+
+    def remove_current_layer(self):
+        index = self.selected_layer_index
+        if index is None or not (0 <= index < len(self.volume_layers)):
+            return
+
+        self.volume_layers.pop(index)
+        self.layer_list.takeItem(index)
+
+        # Remove corresponding opacity and slice sliders (assumes 2 widgets per layer)
+        for _ in range(4):
+            if self.slider_container.count() > 0:
+                if widget := self.slider_container.takeAt(
+                    self.slider_container.count() - 1
+                ).widget():
+                    widget.deleteLater()
+
+        if len(self.volume_layers) == 0:
+            self.selected_layer_index = None
+        elif index >= len(self.volume_layers):
+            self.selected_layer_index = len(self.volume_layers) - 1
+        else:
+            self.selected_layer_index = index
+
+        self.layer_list.setCurrentRow(self.selected_layer_index if self.selected_layer_index is not None else -1)
+
+        self.update_rotation_sliders()
+        self.update_global_slice_slider_range()
+        self.update_display()
+
+    def on_slice_change(self, value):
+        self.slice_index = value - self.global_slice_offset
+        self.update_display()
 
 
