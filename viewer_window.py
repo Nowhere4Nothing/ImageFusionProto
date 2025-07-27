@@ -189,7 +189,6 @@ class DicomViewer(QMainWindow):
         self._update_timer.start(150)
         self.update_display()
 
-    # TODO Rename this here and in `load_dicom`
     def _extracted_from_load_dicom_18(self, arg0, arg1, arg2, layer):
         arg0.setValue(arg1)
         # opacity_slider.valueChanged.connect(lambda val, layer=layer: self.update_opacity(layer, val))
@@ -200,7 +199,12 @@ class DicomViewer(QMainWindow):
         self.selected_layer_index = index
         self.update_display()
 
+    #TODO Needs to be optimised
     def update_display(self):
+        if not self.volume_layers:
+            self.scene.clear()  # Clear the scene if no layers
+            return
+
         img = process_layers(self.volume_layers, self.slice_index)
         h, w = img.shape
         qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
@@ -285,6 +289,8 @@ class DicomViewer(QMainWindow):
         self.slice_index = value - self.global_slice_offset
         self.update_display()
 
+    # The below fucks the Phycharm when uncommented, uses a lot of memory
+    # TODO Find a way to optimise it
     # def update_display(self):
         # if not self.volume_layers:
         #     self.scene.clear()

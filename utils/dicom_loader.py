@@ -15,8 +15,11 @@ def load_dicom_volume(folder):
             if not hasattr(ds, "ImagePositionPatient"):
                 print(f"Skipping {file}: Missing ImagePositionPatient")
                 continue
-            if not hasattr(ds, "pixel_array"):
-                print(f"Skipping {file}: No image data")
+
+            try:
+                _ = ds.pixel_array
+            except Exception:
+                print(f"Skipping {file}: Unable to read pixel data")
                 continue
 
             slices.append(ds)
@@ -33,11 +36,14 @@ def load_dicom_volume(folder):
     except AttributeError:
         print("Some slices are missing ImagePositionPatient metadata.")
         return None
+    except Exception as e:
+        print(f"Sorting slices failed due to missing or invalid ImagePositionPatient: {e}")
+        return None
 
-    slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
     volume = np.stack([s.pixel_array for s in slices]).astype(np.float32)
     volume -= volume.min()
+    max_val = volume.max()
     if volume.max() != 0:
-        volume /= volume.max()
+        volume /= max_val
 
     return volume
