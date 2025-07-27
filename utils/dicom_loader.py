@@ -18,6 +18,12 @@ def load_dicom_volume(folder):
         print("No valid DICOM slices.")
         return None
 
+    try:
+        slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
+    except AttributeError:
+        print("Some slices are missing ImagePositionPatient metadata.")
+        return None
+
     slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
     volume = np.stack([s.pixel_array for s in slices]).astype(np.float32)
     volume -= volume.min()

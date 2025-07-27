@@ -264,4 +264,54 @@ class DicomViewer(QMainWindow):
         self.slice_index = value - self.global_slice_offset
         self.update_display()
 
+    # def update_display(self):
+        # if not self.volume_layers:
+        #     self.scene.clear()
+        #     return
+        #
+        # base_shape = self.volume_layers[0].data[0].shape
+        # img = np.zeros(base_shape, dtype=np.float32)
+        #
+        # for layer in self.volume_layers:
+        #     if not layer.visible:
+        #         continue
+        #
+        #     volume = layer.data.copy()  # Work on a copy to avoid modifying original
+
+        #     # Apply IS rotation (around PA axis) - axes (0,1)
+        #     if layer.rotation[2] != 0:
+        #         volume = rotate(volume, angle=layer.rotation[2], axes=(0, 1), reshape=False, mode='nearest')
+        #
+        #     # Apply PA rotation (around LR axis) - axes (0,2)
+        #     if layer.rotation[1] != 0:
+        #         volume = rotate(volume, angle=layer.rotation[1], axes=(0, 2), reshape=False, mode='nearest')
+        #
+        #     # Apply LR rotation (in-plane rotation) - axes (1,2)
+        #     if layer.rotation[0] != 0:
+        #         volume = rotate(volume, angle=layer.rotation[0], axes=(1, 2), reshape=False, mode='nearest')
+        #
+        #     # Determine slice index after rotation
+        #     slice_idx = np.clip(self.slice_index + layer.slice_offset, 0, volume.shape[0] - 1)
+        #     overlay = volume[slice_idx]
+        #
+        #     # Apply translation
+        #     offset_x, offset_y = layer.offset
+        #     shifted = np.roll(overlay, shift=offset_x, axis=1)
+        #     shifted = np.roll(shifted, shift=offset_y, axis=0)
+        #
+        #     # Composite layer using opacity
+        #     img = img * (1 - layer.opacity) + shifted * layer.opacity
+        #
+        # # Normalize and display
+        # img = np.clip(img, 0, 1)
+        # img_uint8 = (img * 255).astype(np.uint8)
+        # h, w = img.shape
+        # qimage = QImage(img_uint8.data, w, h, w, QImage.Format.Format_Grayscale8)
+        # pixmap = QPixmap.fromImage(qimage)
+        # scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.AspectRatioMode.KeepAspectRatio)
+        #
+        # self.scene.clear()
+        # self.scene.addPixmap(scaled_pixmap)
+
+
 
