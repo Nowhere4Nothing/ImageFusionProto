@@ -9,6 +9,16 @@ def load_dicom_volume(folder):
         path = os.path.join(folder, file)
         try:
             ds = pydicom.dcmread(path)
+            # Only keep CT slices with image data and position info
+            if getattr(ds, "Modality", "") != "CT":
+                continue
+            if not hasattr(ds, "ImagePositionPatient"):
+                print(f"Skipping {file}: Missing ImagePositionPatient")
+                continue
+            if not hasattr(ds, "pixel_array"):
+                print(f"Skipping {file}: No image data")
+                continue
+
             slices.append(ds)
         except Exception as e:
             print(f"Failed to read {path}: {e}")

@@ -6,12 +6,33 @@ from PySide6.QtWidgets import (
     QFrame, QSizePolicy
 )
 from PySide6.QtGui import QImage, QPixmap, QPainter, QBrush, QColor
-from PySide6.QtCore import Qt, QEvent
+from PySide6.QtCore import Qt, QEvent, QTimer
 
 from volume_layer import VolumeLayer
 from utils.dicom_loader import load_dicom_volume
 from utils.image_processing import process_layers
 
+
+class RotationControlPanel(QFrame):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.sliders = []
+        layout = QVBoxLayout(self)
+        for i, axis in enumerate(["LR", "PA", "IS"]):
+            layout.addWidget(QLabel(f"{axis} Rotation:"))
+            slider = QSlider(Qt.Horizontal)
+            slider.setRange(-180, 180)
+
+            slider.valueChanged.connect(lambda v, idx=i: parent.preview_rotation(idx, v))
+
+            # apply final update only on release
+            slider.sliderReleased.connect(lambda idx=i, s=slider: parent.update_rotation(idx, s.value()))
+
+            layout.addWidget(slider)
+            self.sliders.append(slider)
+
+        self.setFrameShape(QFrame.StyledPanel)
+        self.setStyleSheet("border:1px solid gray; padding:4px; border-radius:5px;")
 
 class DicomViewer(QMainWindow):
     def __init__(self):
@@ -23,6 +44,10 @@ class DicomViewer(QMainWindow):
         self.slice_index = 0
         self.global_slice_offset = 0
 
+        self._update_timer = QTimer()
+        self._update_timer.setSingleShot(True)
+        self._update_timer.timeout.connect(self.update_display)
+
         # === UI and layout setup ===
         self.setup_ui()
 
@@ -30,65 +55,32 @@ class DicomViewer(QMainWindow):
         self.last_mouse_pos = None
         self.graphics_view.viewport().installEventFilter(self)
 
+    def _init_rotation_panel(self):
+        self.rotation_panel = RotationControlPanel(self)
+        self.rotation_sliders = self.rotation_panel.sliders
+
+    def preview_rotation(self, axis_index, value):
+        # For now just print, or do a lightweight update if you want
+        print(f"Preview rotation axis {axis_index} = {value}")
+
     def setup_ui(self):
-        # === Graphics View ===
-        self.scene = QGraphicsScene()
-        self.graphics_view = QGraphicsView(self.scene)
-        self.graphics_view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
-        self.graphics_view.setRenderHints(
-            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
-        )
-
-        self.layer_list = QListWidget()
-        self.layer_list.currentRowChanged.connect(self.select_layer)
-
-        load_button = QPushButton("Load DICOM Folder")
-        load_button.clicked.connect(self.load_dicom)
-
-        remove_button = QPushButton("Remove Current Layer")
-        remove_button.clicked.connect(self.remove_current_layer)
-
-        self.toggle_visibility_button = QPushButton("Hide Current Layer")
-        # self.toggle_visibility_button.clicked.connect(self.toggle_current_layer_visibility)
-
+        self._init_graphics_view()
+        self._init_layer_list()
+        self._init_rotation_panel()
         self.slider_container = QVBoxLayout()
-
-        self.slice_slider = QSlider(Qt.Orientation.Horizontal)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(0)
-        self.slice_slider.setValue(0)
-        self.slice_slider.valueChanged.connect(self.on_slice_change)
-
-        # Rotation sliders
-        self.rotation_sliders = []
-        self.rotation_slider_container = QVBoxLayout()
-        for i, axis in enumerate(["LR", "PA", "IS"]):
-            label = QLabel(f"{axis} Rotation:")
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setMinimum(-180)
-            slider.setMaximum(180)
-            slider.setValue(0)
-            slider.valueChanged.connect(lambda val, axis_index=i: self.update_rotation(axis_index, val))
-            self.rotation_slider_container.addWidget(label)
-            self.rotation_slider_container.addWidget(slider)
-            self.rotation_sliders.append(slider)
-
-        rotation_frame = QFrame()
-        rotation_frame.setLayout(self.rotation_slider_container)
-        rotation_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        rotation_frame.setStyleSheet("QFrame { border: 1px solid gray; border-radius: 5px; padding: 4px; }")
+        self._init_global_slice_slider()
 
         controls = QVBoxLayout()
-        controls.addWidget(load_button)
-        controls.addWidget(self.toggle_visibility_button)
-        controls.addWidget(remove_button)
-        controls.addWidget(QLabel("Select Layer:"))
-        controls.addWidget(self.layer_list)
-        controls.addWidget(QLabel("Rotation Controls"))
-        controls.addWidget(rotation_frame)
-        controls.addLayout(self.slider_container)
-        controls.addWidget(QLabel("Global Slice"))
-        controls.addWidget(self.slice_slider)
+        for w in (
+                self.load_btn,
+                self.toggle_visibility_button,
+                self.remove_button,
+                QLabel("Select Layer:"), self.layer_list,
+                QLabel("Rotation Controls"), self.rotation_panel,
+                self.slider_container,
+                QLabel("Global Slice"), self.slice_slider
+        ):
+            controls.addWidget(w) if isinstance(w, QWidget) else controls.addLayout(w)
 
         layout = QHBoxLayout()
         layout.addLayout(controls, 1)
@@ -97,6 +89,34 @@ class DicomViewer(QMainWindow):
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
+
+    def _init_graphics_view(self):
+        self.scene = QGraphicsScene()
+        self.graphics_view = QGraphicsView(self.scene)
+        self.graphics_view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        self.graphics_view.setRenderHints(QPainter.Antialiasing |
+                                          QPainter.SmoothPixmapTransform)
+
+    def _init_layer_list(self):
+        self.layer_list = QListWidget()
+        self.layer_list.currentRowChanged.connect(self.select_layer)
+        self.load_btn = QPushButton("Load DICOM Folder")
+        self.load_btn.clicked.connect(self.load_dicom)
+        self.remove_button = QPushButton("Remove Current Layer")
+        # self.remove_button.clicked.connect(...)
+        self.toggle_visibility_button = QPushButton("Hide Current Layer")
+        self.remove_button.clicked.connect(self.remove_current_layer)
+        # self.toggle_visibility_button.clicked.connect(self.toggle_current_layer_visibility)
+
+    def _init_global_slice_slider(self):
+        self.slice_slider = QSlider(Qt.Horizontal)
+        self.slice_slider.setMinimum(0)
+        self.slice_slider.setMaximum(100)
+        self.slice_slider.setValue(50)
+        self.slice_slider.valueChanged.connect(self.on_slice_change)
+
+    # def update_rotation(self, axis_index, value):
+    #     print(f"Rotation axis {axis_index} set to {value} degrees.")
 
     def load_dicom(self):
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Folder")
@@ -166,6 +186,7 @@ class DicomViewer(QMainWindow):
         layer = self.volume_layers[self.selected_layer_index]
         layer.rotation[axis_index] = value
         layer.cached_rotated_volume = None
+        self._update_timer.start(150)
         self.update_display()
 
     # TODO Rename this here and in `load_dicom`
