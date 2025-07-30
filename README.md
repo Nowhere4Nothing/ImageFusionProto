@@ -9,6 +9,7 @@ Making the protype for the image fusion for assessment 4
 5. Add reset button that resets all sliders [WILL]
 6. Add translation sliders (XYZ) [WILL]
 7. Look at auto fusion code and see how to integrate or what functions can be reused [BOTH]
+8. Split up file into smaller files [WILL]
 
 # Feature list
 - XYZ sliders (Translation)
@@ -21,7 +22,6 @@ Making the protype for the image fusion for assessment 4
 # Questions
 1. How does the automatic fusion work in OnkoDICOM?
 2. Where to put opacity slider and toggle layer button (switch?)
-3. 
 
 # possible rotation fix library:
 https://vtk.org/doc/nightly/html/index.html
