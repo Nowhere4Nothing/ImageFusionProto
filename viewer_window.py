@@ -27,12 +27,12 @@ class RotationControlPanel(QFrame):
             slider.setRange(-90, 90)
             slider.setValue(0)
 
-            def make_value_updater(lbl, sldr):
+            def make_value_updater(lbl):
                 return lambda v: lbl.setText(f"{v}°")
-            slider.valueChanged.connect(make_value_updater(value_label, slider))
-            slider.valueChanged.connect(lambda v, idx=i: parent.preview_rotation(idx, v))
-            slider.sliderReleased.connect(lambda idx=i, s=slider: parent.update_rotation(idx, s.value()))
-
+            slider.valueChanged.connect(make_value_updater(value_label))
+            # Update rotation live as the slider moves
+            slider.valueChanged.connect(lambda v, idx=i: parent.update_rotation(idx, v))
+            
             row.addWidget(label)
             row.addWidget(slider)
             row.addWidget(value_label)
