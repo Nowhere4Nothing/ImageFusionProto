@@ -13,7 +13,7 @@ Making the protype for the image fusion for assessment 4
 # Feature list
 - XYZ sliders (Translation)
 - LR, PA, IS sliders (Rotation)
-- Transfer ROI between DICOM imagesets
+- Transfer ROI between DICOM image sets
 - Reset the sliders
 - Toggle the overlay DICOM image
 - Colour fusion (potential for multiple colour options such as [(purple = base layer, green = overlay) (purple-green, yellow-darkblue, red-lightblue)])
