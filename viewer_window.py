@@ -17,19 +17,28 @@ class RotationControlPanel(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.sliders = []
+        self.value_labels = []
         layout = QVBoxLayout(self)
         for i, axis in enumerate(["LR", "PA", "IS"]):
-            layout.addWidget(QLabel(f"{axis} Rotation:"))
+            row = QHBoxLayout()
+            label = QLabel(f"{axis} Rotation:")
+            value_label = QLabel("0°")
             slider = QSlider(Qt.Horizontal)
-            slider.setRange(-180, 180)
+            slider.setRange(-90, 90)
+            slider.setValue(0)
 
+            def make_value_updater(lbl, sldr):
+                return lambda v: lbl.setText(f"{v}°")
+            slider.valueChanged.connect(make_value_updater(value_label, slider))
             slider.valueChanged.connect(lambda v, idx=i: parent.preview_rotation(idx, v))
-
-            # apply final update only on release
             slider.sliderReleased.connect(lambda idx=i, s=slider: parent.update_rotation(idx, s.value()))
 
-            layout.addWidget(slider)
+            row.addWidget(label)
+            row.addWidget(slider)
+            row.addWidget(value_label)
+            layout.addLayout(row)
             self.sliders.append(slider)
+            self.value_labels.append(value_label)
 
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("border:1px solid gray; padding:4px; border-radius:5px;")
@@ -83,7 +92,7 @@ class DicomViewer(QMainWindow):
             controls.addWidget(w) if isinstance(w, QWidget) else controls.addLayout(w)
 
         layout = QHBoxLayout()
-        layout.addLayout(controls, 1)
+        layout.addLayout(controls, 2)
         layout.addWidget(self.graphics_view, 4)
 
         container = QWidget()
@@ -140,19 +149,6 @@ class DicomViewer(QMainWindow):
         self.selected_layer_index = len(self.volume_layers) - 1
         self.update_rotation_sliders()
 
-        opacity_slider = self._extracted_from_load_dicom_15()
-        opacity_slider.setValue(100)
-        # opacity_slider.valueChanged.connect(lambda val, layer=layer: self.update_opacity(layer, val))
-        self.slider_container.addWidget(QLabel(f"Opacity: {layer.name}"))
-        self.slider_container.addWidget(opacity_slider)
-
-        slice_offset_slider = self._extracted_from_load_dicom_19(volume)
-        slice_offset_slider.setValue(0)
-        slice_offset_slider.setSingleStep(1)
-        # slice_offset_slider.valueChanged.connect(lambda val, layer=layer: self.update_slice_offset(layer, val))
-        self.slider_container.addWidget(QLabel(f"Slice Offset: {layer.name}"))
-        self.slider_container.addWidget(slice_offset_slider)
-
         self.update_global_slice_slider_range()
         self.update_display()
 
@@ -190,11 +186,30 @@ class DicomViewer(QMainWindow):
         self.update_display()
 
     # TODO Rename this here and in `load_dicom`
-    def _extracted_from_load_dicom_18(self, arg0, arg1, arg2, layer):
-        arg0.setValue(arg1)
-        # opacity_slider.valueChanged.connect(lambda val, layer=layer: self.update_opacity(layer, val))
-        self.slider_container.addWidget(QLabel(f"{arg2}{layer.name}"))
-        self.slider_container.addWidget(arg0)
+    def _extracted_from_load_dicom_18(self, slider, default_value, label_prefix, layer):
+        slider.setValue(default_value)
+        row = QHBoxLayout()
+        label = QLabel(f"{label_prefix}{layer.name}")
+        value_label = QLabel(str(default_value))
+        if "Opacity" in label_prefix:
+            def update_value(val):
+                value_label.setText(f"{val}%")
+            slider.valueChanged.connect(update_value)
+            value_label.setText(f"{default_value}%")
+        elif "Slice Offset" in label_prefix:
+            def update_value(val):
+                value_label.setText(str(val))
+            slider.valueChanged.connect(update_value)
+            value_label.setText(str(default_value))
+        else:
+            def update_value(val):
+                value_label.setText(str(val))
+            slider.valueChanged.connect(update_value)
+            value_label.setText(str(default_value))
+        row.addWidget(label)
+        row.addWidget(slider)
+        row.addWidget(value_label)
+        self.slider_container.addLayout(row)
 
     def select_layer(self, index):
         self.selected_layer_index = index
