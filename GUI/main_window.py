@@ -51,6 +51,8 @@ class DicomViewer(QMainWindow):
 
         self.zoom_panel = ZoomControlPanel()
         self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
+        self.current_zoom = 1.0
+        self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
 
         self.slice_slider = None  # will be set in setup_ui
 
@@ -169,6 +171,14 @@ class DicomViewer(QMainWindow):
         self.viewer_controller.update_rotation(axis_index, value)
 
     def remove_current_layer(self):
+        """
+            Removes the currently selected image layer from the viewer and updates
+             the UI.
+
+            If a layer is selected, this method removes it from both the viewer
+            controller and the layer list, updates the selection, and refreshes the
+            layer controls.
+        """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
@@ -183,11 +193,22 @@ class DicomViewer(QMainWindow):
 
     def on_offset_changed(self, offset):
         """
-            This method updates the translation of the currently selected image layer in the viewer
-            controller when the translation panel's offset is changed.
+            This method updates the translation of the currently selected image layer
+            in the viewer controller when the translation panel's offset is changed.
         """
         self.viewer_controller.update_translation(offset)
 
-    def on_zoom_changed(self, scale_factor):
+    def reset_zoom(self):
         self.graphics_view.resetTransform()
+        self.current_zoom = 1.0
+        self.zoom_panel.set_zoom(1.0)
+
+    def on_zoom_changed(self, new_zoom):
+        # Calculate the relative scale factor
+        scale_factor = new_zoom / self.current_zoom
+
+        # Apply the relative scale
         self.graphics_view.scale(scale_factor, scale_factor)
+
+        # Update current zoom
+        self.current_zoom = new_zoom

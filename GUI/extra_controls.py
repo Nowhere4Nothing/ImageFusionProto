@@ -2,6 +2,12 @@ from PySide6.QtWidgets import QFrame, QVBoxLayout, QHBoxLayout, QLabel, QSlider
 from PySide6.QtCore import Qt
 
 class ZoomControlPanel(QFrame):
+    """
+        Provides a user interface panel for controlling the zoom level of the viewer.
+
+        This panel includes a slider and label for adjusting and displaying the zoom factor,
+        and emits a callback when the zoom value changes.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
 
