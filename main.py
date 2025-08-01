@@ -1,6 +1,6 @@
 import sys
 from PySide6.QtWidgets import QApplication
-from viewer_window import DicomViewer
+from GUI.main_window import DicomViewer
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
