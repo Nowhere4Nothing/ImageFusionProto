@@ -1,5 +1,5 @@
 import os
-from PySide6.QtWidgets import QSlider, QLabel, QHBoxLayout
+from PySide6.QtWidgets import QSlider, QLabel, QHBoxLayout, QFrame, QVBoxLayout
 from PySide6.QtCore import Qt
 
 from volume_layer import VolumeLayer
@@ -49,6 +49,14 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         return None, None, []
 
     layer = VolumeLayer(volume, os.path.basename(folder))
+
+    # Create a frame to contain this layer's controls
+    frame = QFrame()
+    frame.setFrameShape(QFrame.StyledPanel)
+    frame.setStyleSheet("border: 1px solid gray; padding: 4px; border-radius: 5px;")
+
+    layout = QVBoxLayout(frame)
+
     # Setup sliders
     opacity_slider = create_opacity_slider()
     opacity_row = setup_slider_ui(
@@ -57,7 +65,7 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         "Opacity: ",
         layer.name,
         lambda val: update_opacity_cb(layer, val),
-        container_layout,
+        layout,
     )
 
     offset_slider = create_slice_offset_slider(volume)
@@ -67,10 +75,14 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         "Slice Offset: ",
         layer.name,
         lambda val: update_offset_cb(layer, val),
-        container_layout,
+        layout,
     )
-    slider_rows = [offset_row, opacity_row]
-    return layer, layer.name, slider_rows
+    # slider_rows = [offset_row, opacity_row]
+    # return layer, layer.name, slider_rows
+
+    container_layout.addWidget(frame)
+
+    return layer, layer.name, [frame]
 
 def create_opacity_slider():
     slider = QSlider(Qt.Orientation.Horizontal)

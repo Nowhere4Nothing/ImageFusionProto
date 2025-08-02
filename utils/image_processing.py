@@ -65,19 +65,35 @@ def translate_image(img, x_offset, y_offset):
     h, w = img.shape
     result = np.zeros_like(img)
 
-    # Determine target coordinates in destination
-    x_start = max(0, x_offset)
-    y_start = max(0, y_offset)
-    x_end = min(w, w + x_offset) if x_offset >= 0 else w + x_offset
-    y_end = min(h, h + y_offset) if y_offset >= 0 else h + y_offset
+    src_x_start, src_x_end, dst_x_start, dst_x_end = calculate_shift_coords(x_offset, w)
+    src_y_start, src_y_end, dst_y_start, dst_y_end = calculate_shift_coords(y_offset, h)
 
-    # Determine source coordinates from original image
-    src_x_start = max(0, -x_offset)
-    src_y_start = max(0, -y_offset)
-    src_x_end = src_x_start + (x_end - x_start)
-    src_y_end = src_y_start + (y_end - y_start)
-
-    # Apply the shift
-    result[y_start:y_end, x_start:x_end] = img[src_y_start:src_y_end, src_x_start:src_x_end]
+    if src_x_end > src_x_start and src_y_end > src_y_start:
+        result[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = img[src_y_start:src_y_end,
+                                                               src_x_start:src_x_end]
 
     return result
+
+def calculate_shift_coords(offset, length):
+    """
+    Calculate source and destination slice indices for 1D shift.
+
+    Args:
+        offset (int): shift amount (positive or negative)
+        length (int): length of the dimension
+
+    Returns:
+        (src_start, src_end, dst_start, dst_end): tuple of indices for slicing
+    """
+    if offset >= 0:
+        src_start = 0
+        src_end = max(0, length - offset)
+        dst_start = offset
+        dst_end = offset + src_end
+    else:
+        src_start = -offset
+        src_end = length
+        dst_start = 0
+        dst_end = src_end - src_start
+
+    return src_start, src_end, dst_start, dst_end

@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog
+    QMainWindow, QWidget, QHBoxLayout, QPushButton,
+    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog, QVBoxLayout, QSlider
 )
 from PySide6.QtGui import QPainter, QBrush, QColor
 from PySide6.QtCore import Qt
@@ -19,6 +19,7 @@ class DicomViewer(QMainWindow):
      """
     def __init__(self):
         super().__init__()
+        self.slider_container = None
         self.setWindowTitle("manual image fusion example")
 
         # Setup scene and view
@@ -69,8 +70,6 @@ class DicomViewer(QMainWindow):
              panels, and control buttons, and connects them to the viewer controller
              and the main window layout.
         """
-        # Create slice slider
-        from PySide6.QtWidgets import QSlider
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(100)
@@ -80,7 +79,7 @@ class DicomViewer(QMainWindow):
         self.viewer_controller.set_slice_slider(self.slice_slider)
 
         # Create slider container for opacity and offset sliders
-        from PySide6.QtWidgets import QVBoxLayout
+       
         self.slider_container = QVBoxLayout()
         self.viewer_controller.set_slider_container(self.slider_container)
 
@@ -185,15 +184,18 @@ class DicomViewer(QMainWindow):
 
         layer_name = self.layer_list.item(index).text()
 
-        # Remove sliders for this layer
-        slider_rows = self.layer_slider_rows.pop(layer_name, [])
-        for row in slider_rows:
-            # Remove all widgets in the row
-            for i in reversed(range(row.count())):
-                if widget := row.itemAt(i).widget():
-                    widget.setParent(None)
-            # Remove the layout from the container
-            self.slider_container.removeItem(row)
+        # Remove sliders (frames) for this layer
+        slider_frames = self.layer_slider_rows.pop(layer_name, [])
+        for frame in slider_frames:
+            try:
+                #throws error if not here when deleting layers
+                if frame is not None:
+                    self.slider_container.removeWidget(frame)
+                    frame.setParent(None)
+                    frame.deleteLater()
+            except RuntimeError:
+                # Frame already deleted — skip
+                continue
 
         # Remove the image layer
         self.viewer_controller.remove_current_layer()
@@ -235,6 +237,7 @@ class DicomViewer(QMainWindow):
             Args:
                 callback: A function that takes a single float argument representing
                 the new zoom factor.
+                :param new_zoom: 
         """
         # Calculate the relative scale factor
         scale_factor = new_zoom / self.current_zoom
