@@ -82,3 +82,9 @@ class TranslationControlPanel(QFrame):
             self.sliders[i].setValue(offsets[i])
             self.sliders[i].blockSignals(False)
 
+    def reset_trans(self):
+        for slider, label in zip(self.sliders, self.labels):
+            slider.blockSignals(True)
+            slider.setValue(0)
+            label.setText("0 px")
+            slider.blockSignals(False)

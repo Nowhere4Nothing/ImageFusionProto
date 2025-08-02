@@ -50,3 +50,10 @@ class RotationControlPanel(QFrame):
             self.sliders[i].blockSignals(True)
             self.sliders[i].setValue(val)
             self.sliders[i].blockSignals(False)
+
+    def reset_rotation(self):
+        for slider, label in zip(self.sliders, self.value_labels):
+            slider.blockSignals(True)
+            slider.setValue(0)
+            label.setText("0°")
+            slider.blockSignals(False)
