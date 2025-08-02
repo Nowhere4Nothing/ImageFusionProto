@@ -1,14 +1,17 @@
-import os
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap, QBrush, QColor
 from PySide6.QtWidgets import QSlider, QLabel, QHBoxLayout
 
-import numpy as np
-from volume_layer import VolumeLayer
-from utils.dicom_loader import load_dicom_volume
 from utils.image_processing import process_layers
+from utils.layer_loader import load_dicom_layer
 
 class ViewerController:
+    """
+        Manages the logic and state for the DICOM image viewer.
+
+        This class handles loading DICOM volumes, managing image layers, updating display properties,
+        and synchronizing UI controls with the underlying data.
+        """
     def __init__(self, scene):
         self.scene = scene
 
@@ -32,59 +35,20 @@ class ViewerController:
         self.slice_slider.valueChanged.connect(self.on_slice_change)
 
     def load_dicom_folder(self, folder):
-        volume = load_dicom_volume(folder)
-        if volume is None:
+        layer, name = load_dicom_layer(
+            folder,
+            self.slider_container,
+            self.update_opacity,
+            self.update_slice_offset,
+        )
+        if layer is None:
             return None
 
-        layer = VolumeLayer(volume, os.path.basename(folder))
         self.volume_layers.append(layer)
-
-        # Setup sliders for this layer
-        opacity_slider = self._create_opacity_slider()
-        self._setup_slider(opacity_slider, 100, 'Opacity: ', layer, self.update_opacity)
-
-        slice_offset_slider = self._create_slice_offset_slider(volume)
-        self._setup_slider(slice_offset_slider, 0, 'Slice Offset: ', layer, self.update_slice_offset)
-
         self.selected_layer_index = len(self.volume_layers) - 1
-
         self.update_global_slice_slider_range()
         self.update_display()
-        return layer.name
-
-    def _create_opacity_slider(self):
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setMinimum(1)
-        slider.setMaximum(100)
-        return slider
-
-    def _create_slice_offset_slider(self, volume):
-        slider = QSlider(Qt.Orientation.Horizontal)
-        slider.setMinimum(-volume.shape[0] + 1)
-        slider.setMaximum(volume.shape[0] - 1)
-        return slider
-
-    def _setup_slider(self, slider, default_value, label_prefix, layer, update_method):
-        slider.setValue(default_value)
-        row = QHBoxLayout()
-        label = QLabel(f"{label_prefix}{layer.name}")
-        value_label = QLabel(str(default_value))
-
-        def update_value(val):
-            if "Opacity" in label_prefix:
-                value_label.setText(f"{val}%")
-            else:
-                value_label.setText(str(val))
-
-        slider.valueChanged.connect(update_value)
-        slider.valueChanged.connect(lambda val: update_method(layer, val))
-        update_value(default_value)
-
-        row.addWidget(label)
-        row.addWidget(slider)
-        row.addWidget(value_label)
-        if self.slider_container:
-            self.slider_container.addLayout(row)
+        return name
 
     def update_opacity(self, layer, value):
         layer.opacity = value / 100.0
@@ -174,4 +138,11 @@ class ViewerController:
             self.selected_layer_index = index
 
         self.update_global_slice_slider_range()
+        self.update_display()
+
+    def update_translation(self, offset):
+        if self.selected_layer_index is None:
+            return
+        layer = self.volume_layers[self.selected_layer_index]
+        layer.offset = offset
         self.update_display()

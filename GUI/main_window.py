@@ -7,8 +7,16 @@ from PySide6.QtCore import Qt
 
 from GUI.rotation_panel import RotationControlPanel
 from Controller.viewer_controller import ViewerController
+from GUI.translation_panel import TranslationControlPanel
+from GUI.extra_controls import ZoomControlPanel
 
 class DicomViewer(QMainWindow):
+    """
+     Main window for the manual image fusion DICOM viewer application.
+
+     This class sets up the user interface, manages user interactions, and coordinates with the
+     viewer controller to handle DICOM image layers, visualization, and controls.
+     """
     def __init__(self):
         super().__init__()
         self.setWindowTitle("manual image fusion example")
@@ -38,11 +46,26 @@ class DicomViewer(QMainWindow):
         self.rotation_panel = RotationControlPanel()
         self.rotation_panel.set_rotation_changed_callback(self.on_rotation_changed)
 
+        self.translation_panel = TranslationControlPanel()
+        self.translation_panel.set_offset_changed_callback(self.on_offset_changed)
+
+        self.zoom_panel = ZoomControlPanel()
+        self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
+        self.current_zoom = 1.0
+        self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
+
         self.slice_slider = None  # will be set in setup_ui
 
         self.setup_ui()
 
     def setup_ui(self):
+        """
+             Sets up the user interface for the DICOM viewer main window.
+
+             This method creates and arranges all UI components, including sliders,
+             panels, and control buttons, and connects them to the viewer controller
+             and the main window layout.
+        """
         # Create slice slider
         from PySide6.QtWidgets import QSlider
         self.slice_slider = QSlider(Qt.Horizontal)
@@ -65,9 +88,21 @@ class DicomViewer(QMainWindow):
         controls.addWidget(self.remove_button)
         controls.addWidget(QLabel("Select Layer:"))
         controls.addWidget(self.layer_list)
+
+        #Rotation sliders
         controls.addWidget(QLabel("Rotation Controls"))
         controls.addWidget(self.rotation_panel)
         controls.addLayout(self.slider_container)
+
+        #translation sliders
+        controls.addWidget(QLabel("Translation Controls"))
+        controls.addWidget(self.translation_panel)
+
+        #Zoom in extra container
+        controls.addWidget(QLabel("Zoom"))
+        controls.addWidget(self.zoom_panel)
+
+        #global slice slider
         controls.addWidget(QLabel("Global Slice"))
         controls.addWidget(self.slice_slider)
 
@@ -76,11 +111,22 @@ class DicomViewer(QMainWindow):
         layout.addLayout(controls, 2)
         layout.addWidget(self.graphics_view, 4)
 
+        #Adding to the controller
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
 
     def load_dicom(self):
+        """
+            Loads a DICOM folder and adds it as a new layer to the viewer.
+
+            Prompts the user to select a DICOM folder, loads the volume using the viewer controller,
+            and updates the layer list and controls if successful.
+
+            Returns:
+                None
+            """
+
         from PySide6.QtWidgets import QFileDialog
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Folder")
         if not folder:
@@ -92,23 +138,47 @@ class DicomViewer(QMainWindow):
             # Select the newly added layer
             new_index = self.layer_list.count() - 1
             self.layer_list.setCurrentRow(new_index)
-            self.update_rotation_sliders()
+            self.update_layer_controls()
 
     def on_layer_selected(self, index):
-        self.viewer_controller.select_layer(index)
-        self.update_rotation_sliders()
+        """
+              Handles the event when a new layer is selected in the layer list.
 
-    def update_rotation_sliders(self):
+              Updates the selected layer in the viewer controller and refreshes the layer controls accordingly.
+
+              Args:
+                  index: The index of the newly selected layer.
+              """
+        self.viewer_controller.select_layer(index)
+        self.update_layer_controls()
+
+    def update_layer_controls(self):
+        """
+                Updates the rotation and translation controls to match the currently selected layer.
+
+                If no layer is selected, resets the controls to default values. Otherwise, sets the controls
+                to reflect the rotation and offset of the selected image layer.
+        """
         if self.viewer_controller.selected_layer_index is None:
             self.rotation_panel.set_rotations([0, 0, 0])
+            self.translation_panel.set_offsets([0, 0])
         else:
             layer = self.viewer_controller.volume_layers[self.viewer_controller.selected_layer_index]
             self.rotation_panel.set_rotations(layer.rotation)
+            self.translation_panel.set_offsets(layer.offset)
 
     def on_rotation_changed(self, axis_index, value):
         self.viewer_controller.update_rotation(axis_index, value)
 
     def remove_current_layer(self):
+        """
+            Removes the currently selected image layer from the viewer and updates
+             the UI.
+
+            If a layer is selected, this method removes it from both the viewer
+            controller and the layer list, updates the selection, and refreshes the
+            layer controls.
+        """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
@@ -118,4 +188,27 @@ class DicomViewer(QMainWindow):
         count = self.layer_list.count()
         if count > 0:
             self.layer_list.setCurrentRow(min(index, count - 1))
-        self.update_rotation_sliders()
+        self.update_layer_controls()
+
+
+    def on_offset_changed(self, offset):
+        """
+            This method updates the translation of the currently selected image layer
+            in the viewer controller when the translation panel's offset is changed.
+        """
+        self.viewer_controller.update_translation(offset)
+
+    def reset_zoom(self):
+        self.graphics_view.resetTransform()
+        self.current_zoom = 1.0
+        self.zoom_panel.set_zoom(1.0)
+
+    def on_zoom_changed(self, new_zoom):
+        # Calculate the relative scale factor
+        scale_factor = new_zoom / self.current_zoom
+
+        # Apply the relative scale
+        self.graphics_view.scale(scale_factor, scale_factor)
+
+        # Update current zoom
+        self.current_zoom = new_zoom
