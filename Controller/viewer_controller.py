@@ -153,3 +153,6 @@ class ViewerController:
         layer = self.volume_layers[self.selected_layer_index]
         layer.offset = offset
         self.update_display()
+
+    def reset_zoom(self):
+        self.scene.views()[0].resetTransform()

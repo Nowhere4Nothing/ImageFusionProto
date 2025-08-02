@@ -47,6 +47,9 @@ class DicomViewer(QMainWindow):
         self.toggle_visibility_button = QPushButton("Hide Current Layer")
         # TODO: Connect toggle visibility logic if needed
 
+        self.reset_sliders_button = QPushButton("Reset Sliders")
+        self.reset_sliders_button.clicked.connect(self.reset_layer_controls)
+
         self.rotation_panel = RotationControlPanel()
         self.rotation_panel.set_rotation_changed_callback(self.on_rotation_changed)
 
@@ -90,6 +93,7 @@ class DicomViewer(QMainWindow):
         controls.addWidget(self.remove_button)
         controls.addWidget(QLabel("Select Layer:"))
         controls.addWidget(self.layer_list)
+        controls.addWidget(self.reset_sliders_button)
 
         #Rotation sliders
         controls.addWidget(QLabel("Rotation Controls"))
@@ -232,18 +236,77 @@ class DicomViewer(QMainWindow):
 
     def on_zoom_changed(self, new_zoom):
         """
-            Sets the callback function to be called when the zoom value changes.
+            Updates the zoom level of the graphics view based on the provided zoom factor.
+
+            This method resets the current transformation and applies the new zoom,
+            updating the internal zoom state.
 
             Args:
-                callback: A function that takes a single float argument representing
-                the new zoom factor.
-                :param new_zoom: 
+                new_zoom: The new zoom factor to apply to the graphics view.
         """
-        # Calculate the relative scale factor
-        scale_factor = new_zoom / self.current_zoom
+        # Always reset the view's transform before applying new zoom
+        self.graphics_view.resetTransform()
 
-        # Apply the relative scale
-        self.graphics_view.scale(scale_factor, scale_factor)
+        # Apply the absolute zoom level
+        self.graphics_view.scale(new_zoom, new_zoom)
 
-        # Update current zoom
+        # Track the current zoom
         self.current_zoom = new_zoom
+
+    def reset_layer_controls(self):
+        index = self.viewer_controller.selected_layer_index
+        if index is None:
+            return
+
+        layer = self.viewer_controller.volume_layers[index]
+
+        # Reset internal layer values
+        layer.rotation = [0, 0, 0]
+        layer.offset = (0, 0)
+        layer.slice_offset = 0
+        layer.opacity = 1.0
+        layer.cached_rotated_volume = None
+
+        # Reset UI controls
+        self.rotation_panel.reset_rotation()
+        self.translation_panel.reset_trans()
+        self.zoom_panel.set_zoom(1.0)
+        self.on_zoom_changed(1.0)
+
+        # Reset opacity and slice offset sliders & update their value labels
+        slider_frames = self.layer_slider_rows.get(layer.name, [])
+        for frame in slider_frames:
+            layout = frame.layout()
+            if not layout:
+                continue
+
+            label_item = layout.itemAt(0)
+            slider_item = layout.itemAt(1)
+            value_label_item = layout.itemAt(2)
+
+            if label_item is None or slider_item is None:
+                continue
+
+            label = label_item.widget()
+            slider = slider_item.widget()
+            value_label = value_label_item.widget() if value_label_item is not None else None
+
+            if isinstance(label, QLabel) and isinstance(slider, QSlider):
+                slider.blockSignals(True)
+                if "Opacity" in label.text():
+                    slider.setValue(100)
+                    if isinstance(value_label, QLabel):
+                        value_label.setText("100%")
+                elif "Slice Offset" in label.text():
+                    slider.setValue(0)
+                    if isinstance(value_label, QLabel):
+                        value_label.setText("0")
+                slider.blockSignals(False)
+
+        # Update the display
+        self.viewer_controller.update_global_slice_slider_range()
+        # index is still valid and active
+        self.viewer_controller.selected_layer_index = index
+
+        #re-render
+        self.viewer_controller.update_display()

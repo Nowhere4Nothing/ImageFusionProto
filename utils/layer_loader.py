@@ -9,26 +9,62 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
     slider.setValue(default_value)
     row = QHBoxLayout()
 
-    label = QLabel(f"{label_prefix}{layer_name}")
-    label.setFixedWidth(120)  # set a max width that works for your UI
-    label.setToolTip(label.text())  # show full text on hover
-    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-    label.setStyleSheet("QLabel { text-overflow: ellipsis; }")  # ellipsis won't work here directly
+    # label = QLabel(f"{label_prefix}{layer_name}")
+    # label.setFixedWidth(120)  # set a max width that works for your UI
+    # label.setToolTip(label.text())  # show full text on hover
+    # label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    # label.setStyleSheet("QLabel { text-overflow: ellipsis; }")  # ellipsis won't work here directly
+    #
+    # # Instead of stylesheet, use elide text with QLabel's setText method:
+    # metrics = label.fontMetrics()
+    # elided_text = metrics.elidedText(label.text(), Qt.TextElideMode.ElideRight, label.width())
+    # label.setText(elided_text)
+    #
+    # value_label = QLabel()
+    # def update_label(val):
+    #     if "Opacity" in label_prefix:
+    #         value_label.setText(f"{val}%")
+    #     else:
+    #         value_label.setText(str(val))
+    #
+    # update_label(default_value)
+    # slider.valueChanged.connect(update_label)
+    # slider.valueChanged.connect(update_callback)
+    #
+    # row.addWidget(label)
+    # row.addWidget(slider)
+    # row.addWidget(value_label)
+    #
+    # if container_layout:
+    #     container_layout.addLayout(row)
+    #
+    # return row
 
-    # Instead of stylesheet, use elide text with QLabel's setText method:
-    metrics = label.fontMetrics()
-    elided_text = metrics.elidedText(label.text(), Qt.TextElideMode.ElideRight, label.width())
-    label.setText(elided_text)
+    label = QLabel()
+    full_text = f"{label_prefix}{layer_name}"
+    label.setToolTip(full_text)
+    label.setFixedWidth(120)
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
+    def update_label_text():
+        metrics = label.fontMetrics()
+        elided = metrics.elidedText(full_text, Qt.TextElideMode.ElideRight, label.width())
+        label.setText(elided)
+
+    label.resizeEvent = lambda event: update_label_text()
+
+    update_label_text()
 
     value_label = QLabel()
-    def update_label(val):
+
+    def update_val_label(val):
         if "Opacity" in label_prefix:
             value_label.setText(f"{val}%")
         else:
             value_label.setText(str(val))
 
-    update_label(default_value)
-    slider.valueChanged.connect(update_label)
+    update_val_label(default_value)
+    slider.valueChanged.connect(update_val_label)
     slider.valueChanged.connect(update_callback)
 
     row.addWidget(label)
@@ -59,7 +95,7 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
 
     # Setup sliders
     opacity_slider = create_opacity_slider()
-    opacity_row = setup_slider_ui(
+    setup_slider_ui(
         opacity_slider,
         100,
         "Opacity: ",
@@ -69,7 +105,7 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     )
 
     offset_slider = create_slice_offset_slider(volume)
-    offset_row = setup_slider_ui(
+    setup_slider_ui(
         offset_slider,
         0,
         "Slice Offset: ",
@@ -77,8 +113,6 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         lambda val: update_offset_cb(layer, val),
         layout,
     )
-    # slider_rows = [offset_row, opacity_row]
-    # return layer, layer.name, slider_rows
 
     container_layout.addWidget(frame)
 
