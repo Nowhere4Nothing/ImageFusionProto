@@ -22,6 +22,17 @@ def sitk_rotate_volume(volume, rotation_angles_deg):
     return sitk.GetArrayFromImage(rotated)
 
 def process_layers(volume_layers, slice_index):
+    """
+      Combines multiple image layers into a single 2D image slice with transformations
+      and blending. Each layer can be rotated, translated, and blended according to its properties.
+
+      Args:
+          volume_layers: List of layer objects, each containing 3D data and transformation
+          attributes. slice_index: Integer index specifying which slice to extract and process.
+
+      Returns:
+          np.ndarray: The resulting 2D image as an 8-bit unsigned integer array.
+      """
     base_shape = volume_layers[0].data[0].shape
     img = np.zeros(base_shape, dtype=np.float32)
 
@@ -31,16 +42,42 @@ def process_layers(volume_layers, slice_index):
 
         volume = layer.data.copy()
 
-        # Use SimpleITK for 3D rotation
+        # Apply 3D rotation with SimpleITK
         if any(r != 0 for r in layer.rotation):
             volume = sitk_rotate_volume(volume, layer.rotation)
 
         slice_idx = np.clip(slice_index + layer.slice_offset, 0, volume.shape[0] - 1)
         overlay = volume[slice_idx]
 
-        shifted = np.roll(overlay, shift=layer.offset[0], axis=1)
-        shifted = np.roll(shifted, shift=layer.offset[1], axis=0)
+        # Apply translation without wraparound
+        x_offset, y_offset = layer.offset
+        shifted = translate_image(overlay, x_offset, y_offset)
 
+        # Blend into final image using layer opacity
         img = img * (1 - layer.opacity) + shifted * layer.opacity
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
+
+def translate_image(img, x_offset, y_offset):
+    """
+    Shift a 2D image without wraparound, filling empty space with 0s.
+    """
+    h, w = img.shape
+    result = np.zeros_like(img)
+
+    # Determine target coordinates in destination
+    x_start = max(0, x_offset)
+    y_start = max(0, y_offset)
+    x_end = min(w, w + x_offset) if x_offset >= 0 else w + x_offset
+    y_end = min(h, h + y_offset) if y_offset >= 0 else h + y_offset
+
+    # Determine source coordinates from original image
+    src_x_start = max(0, -x_offset)
+    src_y_start = max(0, -y_offset)
+    src_x_end = src_x_start + (x_end - x_start)
+    src_y_end = src_y_start + (y_end - y_start)
+
+    # Apply the shift
+    result[y_start:y_end, x_start:x_end] = img[src_y_start:src_y_end, src_x_start:src_x_end]
+
+    return result

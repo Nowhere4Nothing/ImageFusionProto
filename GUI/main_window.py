@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QListWidget, QGraphicsView, QGraphicsScene
+    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog
 )
 from PySide6.QtGui import QPainter, QBrush, QColor
 from PySide6.QtCore import Qt
@@ -29,6 +29,9 @@ class DicomViewer(QMainWindow):
 
         # Setup viewer controller (logic)
         self.viewer_controller = ViewerController(self.scene)
+
+        # Track sliders for cleanup
+        self.layer_slider_rows = {}
 
         # Setup UI components
         self.layer_list = QListWidget()
@@ -126,19 +129,37 @@ class DicomViewer(QMainWindow):
             Returns:
                 None
             """
-
-        from PySide6.QtWidgets import QFileDialog
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Folder")
         if not folder:
             return
 
-        name = self.viewer_controller.load_dicom_folder(folder)
-        if name is not None:
-            self.layer_list.addItem(name)
-            # Select the newly added layer
-            new_index = self.layer_list.count() - 1
-            self.layer_list.setCurrentRow(new_index)
+        # result = self.viewer_controller.load_dicom_folder(folder)
+        # if result is None:
+        #     return
+        #
+        # layer, name, slider_rows = result
+        # self.layer_list.addItem(name)
+        # new_index = self.layer_list.count() - 1
+        # self.layer_list.setCurrentRow(new_index)
+        # self.layer_slider_rows[name] = slider_rows
+        # self.update_layer_controls()
+
+        result = self.viewer_controller.load_dicom_folder(folder)
+        if result is not None:
+            name, layer, slider_rows = result
+            self.layer_list.addItem(name)  # Add layer name (string) to list widget
+            self.layer_list.setCurrentRow(self.layer_list.count() - 1)
+            self.layer_slider_rows[name] = slider_rows
             self.update_layer_controls()
+
+        # layer, name, slider_rows = self.viewer_controller.load_dicom_folder(folder)
+        #
+        # if name is not None:
+        #     self.layer_list.addItem(name)
+        #     # Select the newly added layer
+        #     new_index = self.layer_list.count() - 1
+        #     self.layer_list.setCurrentRow(new_index)
+        #     self.update_layer_controls()
 
     def on_layer_selected(self, index):
         """
@@ -179,15 +200,54 @@ class DicomViewer(QMainWindow):
             controller and the layer list, updates the selection, and refreshes the
             layer controls.
         """
+        # index = self.viewer_controller.selected_layer_index
+        # if index is None:
+        #     return
+        # self.viewer_controller.remove_current_layer()
+        # self.layer_list.takeItem(index)
+        # # Update layer selection after removal
+        # count = self.layer_list.count()
+        # if count > 0:
+        #     self.layer_list.setCurrentRow(min(index, count - 1))
+        # self.update_layer_controls()
+
+        """
+        Removes the currently selected image layer from the viewer and updates
+        the UI.
+
+        This method ensures both the internal data and UI elements (like sliders)
+        are cleaned up properly.
+        """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
+
+        layer_name = self.layer_list.item(index).text()
+
+        # Remove sliders for this layer
+        slider_rows = self.layer_slider_rows.pop(layer_name, [])
+        for row in slider_rows:
+            # Remove all widgets in the row
+            for i in reversed(range(row.count())):
+                if widget := row.itemAt(i).widget():
+                    widget.setParent(None)
+            # Remove the layout from the container
+            self.slider_container.removeItem(row)
+
+        # Remove the image layer
         self.viewer_controller.remove_current_layer()
+
+        # Remove the name from the list
         self.layer_list.takeItem(index)
-        # Update layer selection after removal
-        count = self.layer_list.count()
-        if count > 0:
-            self.layer_list.setCurrentRow(min(index, count - 1))
+
+        # Reselect another layer if available
+        remaining = self.layer_list.count()
+        if remaining > 0:
+            self.layer_list.setCurrentRow(min(index, remaining - 1))
+        else:
+            self.viewer_controller.selected_layer_index = None
+
+        # Refresh controls
         self.update_layer_controls()
 
 
@@ -204,6 +264,13 @@ class DicomViewer(QMainWindow):
         self.zoom_panel.set_zoom(1.0)
 
     def on_zoom_changed(self, new_zoom):
+        """
+            Sets the callback function to be called when the zoom value changes.
+
+            Args:
+                callback: A function that takes a single float argument representing
+                the new zoom factor.
+        """
         # Calculate the relative scale factor
         scale_factor = new_zoom / self.current_zoom
 
