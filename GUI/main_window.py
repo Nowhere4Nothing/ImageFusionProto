@@ -133,17 +133,6 @@ class DicomViewer(QMainWindow):
         if not folder:
             return
 
-        # result = self.viewer_controller.load_dicom_folder(folder)
-        # if result is None:
-        #     return
-        #
-        # layer, name, slider_rows = result
-        # self.layer_list.addItem(name)
-        # new_index = self.layer_list.count() - 1
-        # self.layer_list.setCurrentRow(new_index)
-        # self.layer_slider_rows[name] = slider_rows
-        # self.update_layer_controls()
-
         result = self.viewer_controller.load_dicom_folder(folder)
         if result is not None:
             name, layer, slider_rows = result
@@ -151,15 +140,6 @@ class DicomViewer(QMainWindow):
             self.layer_list.setCurrentRow(self.layer_list.count() - 1)
             self.layer_slider_rows[name] = slider_rows
             self.update_layer_controls()
-
-        # layer, name, slider_rows = self.viewer_controller.load_dicom_folder(folder)
-        #
-        # if name is not None:
-        #     self.layer_list.addItem(name)
-        #     # Select the newly added layer
-        #     new_index = self.layer_list.count() - 1
-        #     self.layer_list.setCurrentRow(new_index)
-        #     self.update_layer_controls()
 
     def on_layer_selected(self, index):
         """
@@ -193,25 +173,6 @@ class DicomViewer(QMainWindow):
 
     def remove_current_layer(self):
         """
-            Removes the currently selected image layer from the viewer and updates
-             the UI.
-
-            If a layer is selected, this method removes it from both the viewer
-            controller and the layer list, updates the selection, and refreshes the
-            layer controls.
-        """
-        # index = self.viewer_controller.selected_layer_index
-        # if index is None:
-        #     return
-        # self.viewer_controller.remove_current_layer()
-        # self.layer_list.takeItem(index)
-        # # Update layer selection after removal
-        # count = self.layer_list.count()
-        # if count > 0:
-        #     self.layer_list.setCurrentRow(min(index, count - 1))
-        # self.update_layer_controls()
-
-        """
         Removes the currently selected image layer from the viewer and updates
         the UI.
 
@@ -240,12 +201,16 @@ class DicomViewer(QMainWindow):
         # Remove the name from the list
         self.layer_list.takeItem(index)
 
-        # Reselect another layer if available
         remaining = self.layer_list.count()
-        if remaining > 0:
-            self.layer_list.setCurrentRow(min(index, remaining - 1))
-        else:
+
+        # Update selected_layer_index safely
+        if remaining == 0:
             self.viewer_controller.selected_layer_index = None
+        else:
+            # If removed last item, select previous, else select same index
+            new_index = min(index, remaining - 1)
+            self.layer_list.setCurrentRow(new_index)
+            self.viewer_controller.selected_layer_index = new_index
 
         # Refresh controls
         self.update_layer_controls()

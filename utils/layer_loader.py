@@ -5,13 +5,22 @@ from PySide6.QtCore import Qt
 from volume_layer import VolumeLayer
 from utils.dicom_loader import load_dicom_volume
 
-
 def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_callback, container_layout):
     slider.setValue(default_value)
     row = QHBoxLayout()
-    label = QLabel(f"{label_prefix}{layer_name}")
-    value_label = QLabel()
 
+    label = QLabel(f"{label_prefix}{layer_name}")
+    label.setFixedWidth(120)  # set a max width that works for your UI
+    label.setToolTip(label.text())  # show full text on hover
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+    label.setStyleSheet("QLabel { text-overflow: ellipsis; }")  # ellipsis won't work here directly
+
+    # Instead of stylesheet, use elide text with QLabel's setText method:
+    metrics = label.fontMetrics()
+    elided_text = metrics.elidedText(label.text(), Qt.TextElideMode.ElideRight, label.width())
+    label.setText(elided_text)
+
+    value_label = QLabel()
     def update_label(val):
         if "Opacity" in label_prefix:
             value_label.setText(f"{val}%")

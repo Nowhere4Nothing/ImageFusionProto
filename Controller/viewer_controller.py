@@ -130,6 +130,7 @@ class ViewerController:
         self.volume_layers.pop(index)
 
         # Remove corresponding sliders from UI (assumes 2 widgets per layer)
+        #TODO If adding more sliders / layers Update
         for _ in range(4):
             if self.slider_container and self.slider_container.count() > 0:
                 item = self.slider_container.takeAt(self.slider_container.count() - 1)
