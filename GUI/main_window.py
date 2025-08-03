@@ -9,6 +9,7 @@ from GUI.rotation_panel import RotationControlPanel
 from Controller.viewer_controller import ViewerController
 from GUI.translation_panel import TranslationControlPanel
 from GUI.extra_controls import ZoomControlPanel
+from utils.layer_loader import reset_opacity_and_offset
 
 class DicomViewer(QMainWindow):
     """
@@ -61,6 +62,8 @@ class DicomViewer(QMainWindow):
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
 
+        self.rt_dose_layer = None
+
         self.slice_slider = None  # will be set in setup_ui
 
         self.setup_ui()
@@ -89,7 +92,7 @@ class DicomViewer(QMainWindow):
         # Compose controls layout
         controls = QVBoxLayout()
         controls.addWidget(self.load_btn)
-        controls.addWidget(self.toggle_visibility_button)
+        # controls.addWidget(self.toggle_visibility_button)
         controls.addWidget(self.remove_button)
         controls.addWidget(QLabel("Select Layer:"))
         controls.addWidget(self.layer_list)
@@ -254,6 +257,13 @@ class DicomViewer(QMainWindow):
         self.current_zoom = new_zoom
 
     def reset_layer_controls(self):
+        """
+            Resets all controls and properties for the currently selected image
+            layer to their default values.
+
+            This method restores the layer's rotation, translation, opacity,
+            and slice offset, and updates the UI controls accordingly.
+        """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
@@ -270,6 +280,8 @@ class DicomViewer(QMainWindow):
         # Reset UI controls
         self.rotation_panel.reset_rotation()
         self.translation_panel.reset_trans()
+        self.viewer_controller.reset_global_slice_slider()
+
         self.zoom_panel.set_zoom(1.0)
         self.on_zoom_changed(1.0)
 
@@ -282,26 +294,16 @@ class DicomViewer(QMainWindow):
 
             label_item = layout.itemAt(0)
             slider_item = layout.itemAt(1)
-            value_label_item = layout.itemAt(2)
 
             if label_item is None or slider_item is None:
                 continue
 
-            label = label_item.widget()
-            slider = slider_item.widget()
-            value_label = value_label_item.widget() if value_label_item is not None else None
-
-            if isinstance(label, QLabel) and isinstance(slider, QSlider):
-                slider.blockSignals(True)
-                if "Opacity" in label.text():
-                    slider.setValue(100)
-                    if isinstance(value_label, QLabel):
-                        value_label.setText("100%")
-                elif "Slice Offset" in label.text():
-                    slider.setValue(0)
-                    if isinstance(value_label, QLabel):
-                        value_label.setText("0")
-                slider.blockSignals(False)
+        reset_opacity_and_offset(
+            layer,
+            layer.opacity_slider,
+            layer.offset_slider,
+            update_display_cb=self.viewer_controller.update_display
+        )
 
         # Update the display
         self.viewer_controller.update_global_slice_slider_range()
