@@ -1,44 +1,14 @@
 import os
-from PySide6.QtWidgets import QSlider, QLabel, QHBoxLayout, QFrame, QVBoxLayout
+from PySide6.QtWidgets import QSlider, QLabel, QHBoxLayout, QFrame, QVBoxLayout, QCheckBox
 from PySide6.QtCore import Qt
 
 from volume_layer import VolumeLayer
 from utils.dicom_loader import load_dicom_volume
 
+
 def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_callback, container_layout):
     slider.setValue(default_value)
     row = QHBoxLayout()
-
-    # label = QLabel(f"{label_prefix}{layer_name}")
-    # label.setFixedWidth(120)  # set a max width that works for your UI
-    # label.setToolTip(label.text())  # show full text on hover
-    # label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-    # label.setStyleSheet("QLabel { text-overflow: ellipsis; }")  # ellipsis won't work here directly
-    #
-    # # Instead of stylesheet, use elide text with QLabel's setText method:
-    # metrics = label.fontMetrics()
-    # elided_text = metrics.elidedText(label.text(), Qt.TextElideMode.ElideRight, label.width())
-    # label.setText(elided_text)
-    #
-    # value_label = QLabel()
-    # def update_label(val):
-    #     if "Opacity" in label_prefix:
-    #         value_label.setText(f"{val}%")
-    #     else:
-    #         value_label.setText(str(val))
-    #
-    # update_label(default_value)
-    # slider.valueChanged.connect(update_label)
-    # slider.valueChanged.connect(update_callback)
-    #
-    # row.addWidget(label)
-    # row.addWidget(slider)
-    # row.addWidget(value_label)
-    #
-    # if container_layout:
-    #     container_layout.addLayout(row)
-    #
-    # return row
 
     label = QLabel()
     full_text = f"{label_prefix}{layer_name}"
@@ -76,7 +46,7 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
 
     return row
 
-def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_cb):
+def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_cb, update_display_cb=None):
     """
     Loads a DICOM folder, creates a VolumeLayer, and adds sliders for opacity and offset.
     """
@@ -90,8 +60,25 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     frame = QFrame()
     frame.setFrameShape(QFrame.StyledPanel)
     frame.setStyleSheet("border: 1px solid gray; padding: 4px; border-radius: 5px;")
+    layer.ui_container = frame
 
     layout = QVBoxLayout(frame)
+
+    # Visibility checkbox
+    checkbox = QCheckBox("Hide Layer")
+    layer.visible = True
+    checkbox.setChecked(layer.visible)
+
+    def on_toggle(visible: bool):
+        # Toggle this layer's visibility based on checkbox state
+        print(f"Checkbox toggled: visible = {visible}")
+        layer.visible = visible
+        if update_display_cb:
+            print("Calling update_display_cb()")
+            update_display_cb()
+
+    checkbox.toggled.connect(on_toggle)
+    layout.addWidget(checkbox)
 
     # Setup sliders
     opacity_slider = create_opacity_slider()

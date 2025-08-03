@@ -40,6 +40,7 @@ class ViewerController:
             self.slider_container,
             self.update_opacity,
             self.update_slice_offset,
+            update_display_cb = self.update_display,
         )
         if layer is None:
             return None
@@ -80,6 +81,7 @@ class ViewerController:
         else:
             self.selected_layer_index = None
 
+        self.highlight_selected_layer()
         self.update_display()
 
     def update_display(self):
@@ -156,3 +158,15 @@ class ViewerController:
 
     def reset_zoom(self):
         self.scene.views()[0].resetTransform()
+
+    def highlight_selected_layer(self):
+        for i, layer in enumerate(self.volume_layers):
+            if hasattr(layer, 'ui_container'):
+                if i == self.selected_layer_index:
+                    layer.ui_container.setStyleSheet(
+                        "border: 2px solid #0078d7; padding: 4px; border-radius: 5px;"
+                    )  # blue-ish highlight
+                else:
+                    layer.ui_container.setStyleSheet(
+                        "border: 1px solid gray; padding: 4px; border-radius: 5px;"
+                    )

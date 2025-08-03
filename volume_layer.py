@@ -7,3 +7,4 @@ class VolumeLayer:
         self.slice_offset = 0
         self.rotation = [0, 0, 0]  #[LR, PA, IS]
         self.visible = True
+

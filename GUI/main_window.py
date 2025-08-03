@@ -61,6 +61,8 @@ class DicomViewer(QMainWindow):
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
 
+        self.rt_dose_layer = None
+
         self.slice_slider = None  # will be set in setup_ui
 
         self.setup_ui()
