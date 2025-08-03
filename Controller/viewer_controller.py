@@ -35,7 +35,7 @@ class ViewerController:
         self.slice_slider.valueChanged.connect(self.on_slice_change)
 
     def load_dicom_folder(self, folder):
-        layer, name = load_dicom_layer(
+        layer, name, slider_rows = load_dicom_layer(
             folder,
             self.slider_container,
             self.update_opacity,
@@ -44,11 +44,17 @@ class ViewerController:
         if layer is None:
             return None
 
+        layer.slider_rows = slider_rows
+
         self.volume_layers.append(layer)
         self.selected_layer_index = len(self.volume_layers) - 1
         self.update_global_slice_slider_range()
         self.update_display()
-        return name
+
+        # Store references to sliders for cleanup later
+        layer.slider_rows = slider_rows
+
+        return name, layer, slider_rows
 
     def update_opacity(self, layer, value):
         layer.opacity = value / 100.0
@@ -124,6 +130,7 @@ class ViewerController:
         self.volume_layers.pop(index)
 
         # Remove corresponding sliders from UI (assumes 2 widgets per layer)
+        #TODO If adding more sliders / layers Update
         for _ in range(4):
             if self.slider_container and self.slider_container.count() > 0:
                 item = self.slider_container.takeAt(self.slider_container.count() - 1)
@@ -146,3 +153,6 @@ class ViewerController:
         layer = self.volume_layers[self.selected_layer_index]
         layer.offset = offset
         self.update_display()
+
+    def reset_zoom(self):
+        self.scene.views()[0].resetTransform()

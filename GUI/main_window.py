@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QLabel, QListWidget, QGraphicsView, QGraphicsScene
+    QMainWindow, QWidget, QHBoxLayout, QPushButton,
+    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog, QVBoxLayout, QSlider
 )
 from PySide6.QtGui import QPainter, QBrush, QColor
 from PySide6.QtCore import Qt
@@ -19,6 +19,7 @@ class DicomViewer(QMainWindow):
      """
     def __init__(self):
         super().__init__()
+        self.slider_container = None
         self.setWindowTitle("manual image fusion example")
 
         # Setup scene and view
@@ -29,6 +30,9 @@ class DicomViewer(QMainWindow):
 
         # Setup viewer controller (logic)
         self.viewer_controller = ViewerController(self.scene)
+
+        # Track sliders for cleanup
+        self.layer_slider_rows = {}
 
         # Setup UI components
         self.layer_list = QListWidget()
@@ -42,6 +46,9 @@ class DicomViewer(QMainWindow):
 
         self.toggle_visibility_button = QPushButton("Hide Current Layer")
         # TODO: Connect toggle visibility logic if needed
+
+        self.reset_sliders_button = QPushButton("Reset Sliders")
+        self.reset_sliders_button.clicked.connect(self.reset_layer_controls)
 
         self.rotation_panel = RotationControlPanel()
         self.rotation_panel.set_rotation_changed_callback(self.on_rotation_changed)
@@ -66,8 +73,6 @@ class DicomViewer(QMainWindow):
              panels, and control buttons, and connects them to the viewer controller
              and the main window layout.
         """
-        # Create slice slider
-        from PySide6.QtWidgets import QSlider
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(100)
@@ -77,7 +82,7 @@ class DicomViewer(QMainWindow):
         self.viewer_controller.set_slice_slider(self.slice_slider)
 
         # Create slider container for opacity and offset sliders
-        from PySide6.QtWidgets import QVBoxLayout
+       
         self.slider_container = QVBoxLayout()
         self.viewer_controller.set_slider_container(self.slider_container)
 
@@ -88,6 +93,7 @@ class DicomViewer(QMainWindow):
         controls.addWidget(self.remove_button)
         controls.addWidget(QLabel("Select Layer:"))
         controls.addWidget(self.layer_list)
+        controls.addWidget(self.reset_sliders_button)
 
         #Rotation sliders
         controls.addWidget(QLabel("Rotation Controls"))
@@ -126,18 +132,16 @@ class DicomViewer(QMainWindow):
             Returns:
                 None
             """
-
-        from PySide6.QtWidgets import QFileDialog
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Folder")
         if not folder:
             return
 
-        name = self.viewer_controller.load_dicom_folder(folder)
-        if name is not None:
-            self.layer_list.addItem(name)
-            # Select the newly added layer
-            new_index = self.layer_list.count() - 1
-            self.layer_list.setCurrentRow(new_index)
+        result = self.viewer_controller.load_dicom_folder(folder)
+        if result is not None:
+            name, layer, slider_rows = result
+            self.layer_list.addItem(name)  # Add layer name (string) to list widget
+            self.layer_list.setCurrentRow(self.layer_list.count() - 1)
+            self.layer_slider_rows[name] = slider_rows
             self.update_layer_controls()
 
     def on_layer_selected(self, index):
@@ -172,22 +176,49 @@ class DicomViewer(QMainWindow):
 
     def remove_current_layer(self):
         """
-            Removes the currently selected image layer from the viewer and updates
-             the UI.
+        Removes the currently selected image layer from the viewer and updates
+        the UI.
 
-            If a layer is selected, this method removes it from both the viewer
-            controller and the layer list, updates the selection, and refreshes the
-            layer controls.
+        This method ensures both the internal data and UI elements (like sliders)
+        are cleaned up properly.
         """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
+
+        layer_name = self.layer_list.item(index).text()
+
+        # Remove sliders (frames) for this layer
+        slider_frames = self.layer_slider_rows.pop(layer_name, [])
+        for frame in slider_frames:
+            try:
+                #throws error if not here when deleting layers
+                if frame is not None:
+                    self.slider_container.removeWidget(frame)
+                    frame.setParent(None)
+                    frame.deleteLater()
+            except RuntimeError:
+                # Frame already deleted — skip
+                continue
+
+        # Remove the image layer
         self.viewer_controller.remove_current_layer()
+
+        # Remove the name from the list
         self.layer_list.takeItem(index)
-        # Update layer selection after removal
-        count = self.layer_list.count()
-        if count > 0:
-            self.layer_list.setCurrentRow(min(index, count - 1))
+
+        remaining = self.layer_list.count()
+
+        # Update selected_layer_index safely
+        if remaining == 0:
+            self.viewer_controller.selected_layer_index = None
+        else:
+            # If removed last item, select previous, else select same index
+            new_index = min(index, remaining - 1)
+            self.layer_list.setCurrentRow(new_index)
+            self.viewer_controller.selected_layer_index = new_index
+
+        # Refresh controls
         self.update_layer_controls()
 
 
@@ -204,11 +235,78 @@ class DicomViewer(QMainWindow):
         self.zoom_panel.set_zoom(1.0)
 
     def on_zoom_changed(self, new_zoom):
-        # Calculate the relative scale factor
-        scale_factor = new_zoom / self.current_zoom
+        """
+            Updates the zoom level of the graphics view based on the provided zoom factor.
 
-        # Apply the relative scale
-        self.graphics_view.scale(scale_factor, scale_factor)
+            This method resets the current transformation and applies the new zoom,
+            updating the internal zoom state.
 
-        # Update current zoom
+            Args:
+                new_zoom: The new zoom factor to apply to the graphics view.
+        """
+        # Always reset the view's transform before applying new zoom
+        self.graphics_view.resetTransform()
+
+        # Apply the absolute zoom level
+        self.graphics_view.scale(new_zoom, new_zoom)
+
+        # Track the current zoom
         self.current_zoom = new_zoom
+
+    def reset_layer_controls(self):
+        index = self.viewer_controller.selected_layer_index
+        if index is None:
+            return
+
+        layer = self.viewer_controller.volume_layers[index]
+
+        # Reset internal layer values
+        layer.rotation = [0, 0, 0]
+        layer.offset = (0, 0)
+        layer.slice_offset = 0
+        layer.opacity = 1.0
+        layer.cached_rotated_volume = None
+
+        # Reset UI controls
+        self.rotation_panel.reset_rotation()
+        self.translation_panel.reset_trans()
+        self.zoom_panel.set_zoom(1.0)
+        self.on_zoom_changed(1.0)
+
+        # Reset opacity and slice offset sliders & update their value labels
+        slider_frames = self.layer_slider_rows.get(layer.name, [])
+        for frame in slider_frames:
+            layout = frame.layout()
+            if not layout:
+                continue
+
+            label_item = layout.itemAt(0)
+            slider_item = layout.itemAt(1)
+            value_label_item = layout.itemAt(2)
+
+            if label_item is None or slider_item is None:
+                continue
+
+            label = label_item.widget()
+            slider = slider_item.widget()
+            value_label = value_label_item.widget() if value_label_item is not None else None
+
+            if isinstance(label, QLabel) and isinstance(slider, QSlider):
+                slider.blockSignals(True)
+                if "Opacity" in label.text():
+                    slider.setValue(100)
+                    if isinstance(value_label, QLabel):
+                        value_label.setText("100%")
+                elif "Slice Offset" in label.text():
+                    slider.setValue(0)
+                    if isinstance(value_label, QLabel):
+                        value_label.setText("0")
+                slider.blockSignals(False)
+
+        # Update the display
+        self.viewer_controller.update_global_slice_slider_range()
+        # index is still valid and active
+        self.viewer_controller.selected_layer_index = index
+
+        #re-render
+        self.viewer_controller.update_display()
