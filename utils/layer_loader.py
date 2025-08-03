@@ -44,7 +44,7 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
     if container_layout:
         container_layout.addLayout(row)
 
-    return row
+    return row, slider, value_label
 
 def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_cb, update_display_cb=None):
     """
@@ -73,6 +73,12 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         # Toggle this layer's visibility based on checkbox state
         print(f"Checkbox toggled: visible = {visible}")
         layer.visible = visible
+
+        if visible:
+            checkbox.setText("Hide Layer")
+        else:
+            checkbox.setText("Show Layer")
+
         if update_display_cb:
             print("Calling update_display_cb()")
             update_display_cb()
@@ -101,6 +107,9 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         layout,
     )
 
+    layer.opacity_slider = opacity_slider
+    layer.offset_slider = offset_slider
+
     container_layout.addWidget(frame)
 
     return layer, layer.name, [frame]
@@ -116,3 +125,20 @@ def create_slice_offset_slider(volume):
     slider.setMinimum(-volume.shape[0] + 1)
     slider.setMaximum(volume.shape[0] - 1)
     return slider
+
+def reset_opacity_and_offset(layer, opacity_slider, offset_slider, update_display_cb=None):
+    # Reset internal layer values
+    layer.opacity = 1.0
+    layer.slice_offset = 0
+
+    _reset_slider_value(opacity_slider, 100)
+    _reset_slider_value(offset_slider, 0)
+    # Call display update callback if provided
+    if update_display_cb:
+        update_display_cb()
+
+def _reset_slider_value(arg0, arg1):
+    # Reset sliders (which will update UI labels due to connected signals)
+    arg0.blockSignals(True)
+    arg0.setValue(arg1)
+    arg0.blockSignals(False)
