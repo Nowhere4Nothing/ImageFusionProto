@@ -5,7 +5,6 @@ from PySide6.QtCore import Qt
 from volume_layer import VolumeLayer
 from utils.dicom_loader import load_dicom_volume
 
-
 def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_callback, container_layout):
     slider.setValue(default_value)
     row = QHBoxLayout()
@@ -48,8 +47,22 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
 
 def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_cb, update_display_cb=None):
     """
-    Loads a DICOM folder, creates a VolumeLayer, and adds sliders for opacity and offset.
-    """
+        Loads a DICOM volume from the specified folder and creates a new image layer with UI controls.
+
+        This function sets up the layer's opacity and slice offset sliders, a visibility checkbox,
+        and adds the controls to the provided container layout.
+
+        Args:
+            folder: Path to the folder containing the DICOM files.
+            container_layout: The layout to which the layer's UI controls will be added.
+            update_opacity_cb: Callback function to handle opacity changes.
+            update_offset_cb: Callback function to handle slice offset changes.
+            update_display_cb: Optional callback function to update the display when layer properties
+            change.
+
+        Returns:
+            tuple: (layer, layer name, list of control frames) if successful, otherwise (None, None, []).
+        """
     volume = load_dicom_volume(folder)
     if volume is None:
         return None, None, []
@@ -70,6 +83,15 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     checkbox.setChecked(layer.visible)
 
     def on_toggle(visible: bool):
+        """
+            Handles toggling the visibility of the layer when the checkbox state changes.
+
+            Updates the layer's visibility property, adjusts the checkbox label,
+            and triggers a display update if a callback is provided.
+
+            Args:
+                visible: Boolean indicating whether the layer should be visible.
+        """
         # Toggle this layer's visibility based on checkbox state
         print(f"Checkbox toggled: visible = {visible}")
         layer.visible = visible
@@ -127,6 +149,18 @@ def create_slice_offset_slider(volume):
     return slider
 
 def reset_opacity_and_offset(layer, opacity_slider, offset_slider, update_display_cb=None):
+    """
+        Resets the opacity and slice offset of a layer to their default values.
+
+        This function also updates the corresponding sliders and triggers
+        a display update if a callback is provided.
+
+        Args:
+            layer: The layer object whose properties are to be reset.
+            opacity_slider: The QSlider controlling the layer's opacity.
+            offset_slider: The QSlider controlling the layer's slice offset.
+            update_display_cb: Optional callback function to update the display after resetting.
+        """
     # Reset internal layer values
     layer.opacity = 1.0
     layer.slice_offset = 0

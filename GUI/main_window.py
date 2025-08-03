@@ -257,6 +257,13 @@ class DicomViewer(QMainWindow):
         self.current_zoom = new_zoom
 
     def reset_layer_controls(self):
+        """
+            Resets all controls and properties for the currently selected image
+            layer to their default values.
+
+            This method restores the layer's rotation, translation, opacity,
+            and slice offset, and updates the UI controls accordingly.
+        """
         index = self.viewer_controller.selected_layer_index
         if index is None:
             return
@@ -273,6 +280,7 @@ class DicomViewer(QMainWindow):
         # Reset UI controls
         self.rotation_panel.reset_rotation()
         self.translation_panel.reset_trans()
+        self.viewer_controller.reset_global_slice_slider()
 
         self.zoom_panel.set_zoom(1.0)
         self.on_zoom_changed(1.0)
@@ -286,7 +294,6 @@ class DicomViewer(QMainWindow):
 
             label_item = layout.itemAt(0)
             slider_item = layout.itemAt(1)
-            value_label_item = layout.itemAt(2)
 
             if label_item is None or slider_item is None:
                 continue
