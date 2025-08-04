@@ -12,7 +12,6 @@ class CoronalViewer(QWidget):
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
 
-        self.view = QGraphicsView(self.scene)
         self.view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
 

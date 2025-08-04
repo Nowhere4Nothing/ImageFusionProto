@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScen
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 
-from Controller.viewer_controller import ViewerController
+from Controller.viewer_controller_Axial import ViewerController
 
 
 class ImageViewer(QWidget):
