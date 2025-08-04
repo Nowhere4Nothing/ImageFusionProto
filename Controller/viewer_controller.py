@@ -12,9 +12,12 @@ class ViewerController:
         This class handles loading DICOM volumes, managing image layers, updating display properties,
         and synchronizing UI controls with the underlying data.
         """
-    def __init__(self, scene):
+    def __init__(self, scene, view, view_type="axial"):
+        self.view_type = view_type
+
         self.initial_slice_slider_value = None
         self.scene = scene
+        self.view = view
 
         self.volume_layers = []
         self.selected_layer_index = None
@@ -45,6 +48,7 @@ class ViewerController:
         Returns:
                 uple: (name, layer, slider_rows) if successful, otherwise None.
         """
+
         layer, name, slider_rows = load_dicom_layer(
             folder,
             self.slider_container,
@@ -52,15 +56,24 @@ class ViewerController:
             self.update_slice_offset,
             update_display_cb = self.update_display,
         )
+
         if layer is None:
             return None
+
+        if self.slider_container is not None and hasattr(layer, 'ui_container'):
+            self.slider_container.addWidget(layer.ui_container)
 
         layer.slider_rows = slider_rows
 
         self.volume_layers.append(layer)
         self.selected_layer_index = len(self.volume_layers) - 1
         self.update_global_slice_slider_range()
-        self.initial_slice_slider_value = self.slice_slider.value()
+
+        if self.slice_slider is not None:
+            self.initial_slice_slider_value = self.slice_slider.value()
+        else:
+            self.initial_slice_slider_value = 0
+
         self.update_display()
 
         # Store references to sliders for cleanup later
@@ -100,16 +113,23 @@ class ViewerController:
             self.scene.clear()
             return
 
-        img = process_layers(self.volume_layers, self.slice_index)
+        img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
+
         h, w = img.shape
         qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
         scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.AspectRatioMode.KeepAspectRatio)
 
         self.scene.clear()
-        self.scene.addPixmap(scaled_pixmap)
+        pixmap_item = self.scene.addPixmap(scaled_pixmap)
+
+        # Fit the pixmap inside the view, keep aspect ratio
+        self.view.fitInView(pixmap_item, Qt.KeepAspectRatio)
 
     def update_global_slice_slider_range(self):
+        if self.slice_slider is None:
+            return
+
         if not self.volume_layers:
             self.slice_slider.setMinimum(0)
             self.slice_slider.setMaximum(0)
@@ -200,4 +220,10 @@ class ViewerController:
         self.slice_index = self.slice_slider.value() - self.global_slice_offset
 
         # Trigger a display update
+        self.update_display()
+
+    def set_view_type(self, view_type: str):
+        if view_type != "axial":
+            raise ValueError("This controller is only for axial view.")
+        self.view_type = view_type
         self.update_display()

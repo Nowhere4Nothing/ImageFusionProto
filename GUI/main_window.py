@@ -1,15 +1,18 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QPushButton,
-    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog, QVBoxLayout, QSlider
+    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog, QVBoxLayout, QSlider, QGridLayout
 )
 from PySide6.QtGui import QPainter, QBrush, QColor
 from PySide6.QtCore import Qt
 
+from GUI.MultiViewWidget import MultiViewWidget
 from GUI.rotation_panel import RotationControlPanel
+from GUI.CoronalViewer import CoronalViewer
 from Controller.viewer_controller import ViewerController
 from GUI.translation_panel import TranslationControlPanel
 from GUI.extra_controls import ZoomControlPanel
 from utils.layer_loader import reset_opacity_and_offset
+from Controller.viewer_controller_coronal import ViewerControllerCoronal
 
 class DicomViewer(QMainWindow):
     """
@@ -24,13 +27,43 @@ class DicomViewer(QMainWindow):
         self.setWindowTitle("manual image fusion example")
 
         # Setup scene and view
-        self.scene = QGraphicsScene()
-        self.graphics_view = QGraphicsView(self.scene)
-        self.graphics_view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
-        self.graphics_view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+        self.multi_view = MultiViewWidget()
+
+        self.axial_scene = self.multi_view.axial_viewer.scene
+        self.axial_view = self.multi_view.axial_viewer.view
+
+        self.viewer_controller = ViewerController(self.axial_scene, self.axial_view)
+
+
+        # Central widget
+        main_layout = QVBoxLayout()
+
+        # Top row: axial + coronal side-by-side
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.multi_view.axial_viewer)  # QGraphicsView widget
+        top_row.addWidget(self.multi_view.coronal_viewer)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.multi_view.sagittal_viewer)
+        bottom_row.addStretch()
+
+        main_layout.addLayout(top_row)
+        main_layout.addLayout(bottom_row)
+
+        # for view in [self.axial_view, self.coronal_viewer, self.sagittal_view]:
+        #     view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        #     view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
+
+        # self.scene = QGraphicsScene()
+        # self.graphics_view = QGraphicsView(self.scene)
+        # self.graphics_view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
+        # self.graphics_view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
 
         # Setup viewer controller (logic)
-        self.viewer_controller = ViewerController(self.scene)
+        # self.viewer_controller = ViewerController(self.scene)
+
+        self.viewer_controller = ViewerController(self.axial_scene, self.axial_view)
 
         # Track sliders for cleanup
         self.layer_slider_rows = {}
@@ -116,13 +149,27 @@ class DicomViewer(QMainWindow):
         controls.addWidget(self.slice_slider)
 
         # Compose main layout
-        layout = QHBoxLayout()
-        layout.addLayout(controls, 2)
-        layout.addWidget(self.graphics_view, 4)
+        viewer_layout = QVBoxLayout()
 
-        #Adding to the controller
+        # Top row with Axial and Coronal views
+        top_row = QHBoxLayout()
+        top_row.addWidget(self.multi_view.axial_viewer)
+        top_row.addWidget(self.multi_view.coronal_viewer)
+        viewer_layout.addLayout(top_row)
+
+        # Bottom row with Sagittal view centered
+        bottom_row = QHBoxLayout()
+        bottom_row.addStretch()
+        bottom_row.addWidget(self.multi_view.sagittal_viewer)
+        bottom_row.addStretch()
+        viewer_layout.addLayout(bottom_row)
+
+        main_layout = QHBoxLayout()
+        main_layout.addLayout(controls, 2)
+        main_layout.addLayout(viewer_layout, 5)
+
         container = QWidget()
-        container.setLayout(layout)
+        container.setLayout(main_layout)
         self.setCentralWidget(container)
 
     def load_dicom(self):
@@ -139,13 +186,30 @@ class DicomViewer(QMainWindow):
         if not folder:
             return
 
+            # Load the layer once using axial controller (which manages sliders)
         result = self.viewer_controller.load_dicom_folder(folder)
-        if result is not None:
-            name, layer, slider_rows = result
-            self.layer_list.addItem(name)  # Add layer name (string) to list widget
-            self.layer_list.setCurrentRow(self.layer_list.count() - 1)
-            self.layer_slider_rows[name] = slider_rows
-            self.update_layer_controls()
+        if result is None:
+            return
+
+        name, layer, slider_rows = result
+
+            # Now load the same folder into coronal and sagittal without tracking sliders
+        self.multi_view.coronal_viewer.load_dicom_folder(folder)
+        self.multi_view.sagittal_viewer.load_dicom_folder(folder)
+
+            # Update UI with layer info from axial
+        self.layer_list.addItem(name)
+        self.layer_list.setCurrentRow(self.layer_list.count() - 1)
+        self.layer_slider_rows[name] = slider_rows
+        self.update_layer_controls()
+
+        # result = self.viewer_controller.load_dicom_folder(folder)
+        # if result is not None:
+        #     name, layer, slider_rows = result
+        #     self.layer_list.addItem(name)  # Add layer name (string) to list widget
+        #     self.layer_list.setCurrentRow(self.layer_list.count() - 1)
+        #     self.layer_slider_rows[name] = slider_rows
+        #     self.update_layer_controls()
 
     def on_layer_selected(self, index):
         """
@@ -247,13 +311,9 @@ class DicomViewer(QMainWindow):
             Args:
                 new_zoom: The new zoom factor to apply to the graphics view.
         """
-        # Always reset the view's transform before applying new zoom
-        self.graphics_view.resetTransform()
-
-        # Apply the absolute zoom level
-        self.graphics_view.scale(new_zoom, new_zoom)
-
-        # Track the current zoom
+        for viewer in [self.multi_view.axial_viewer, self.multi_view.coronal_viewer, self.multi_view.sagittal_viewer]:
+            viewer.view.resetTransform()
+            viewer.view.scale(new_zoom, new_zoom)
         self.current_zoom = new_zoom
 
     def reset_layer_controls(self):

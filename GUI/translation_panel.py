@@ -20,7 +20,7 @@ class TranslationControlPanel(QFrame):
         self.labels = []
 
         #TODO The Z axis does not work yet fix
-        for i, axis in enumerate(['x', 'y', 'z']):
+        for i, axis in enumerate(['x', 'y']):
             row = QHBoxLayout()
             label = QLabel(f"Axis {axis} Offset:")
             value_label = QLabel("0 px")
