@@ -93,10 +93,10 @@ class ViewerControllerCoronal:
             self.scene.clear()
             return
 
-        img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
+        coronal_img = process_layers(self.volume_layers, self.slice_index, view_type="coronal")
 
-        h, w = img.shape
-        qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
+        h, w = coronal_img.shape
+        qimage = QImage(coronal_img.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
         scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.KeepAspectRatio)
 

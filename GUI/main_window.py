@@ -8,11 +8,13 @@ from PySide6.QtCore import Qt
 from GUI.MultiViewWidget import MultiViewWidget
 from GUI.rotation_panel import RotationControlPanel
 from GUI.CoronalViewer import CoronalViewer
+from GUI.SagittalViewer import SagittalViewer
 from Controller.viewer_controller import ViewerController
 from GUI.translation_panel import TranslationControlPanel
 from GUI.extra_controls import ZoomControlPanel
 from utils.layer_loader import reset_opacity_and_offset
 from Controller.viewer_controller_coronal import ViewerControllerCoronal
+from Controller.viewer_controller_sagittal import ViewerControllerSagittal
 
 class DicomViewer(QMainWindow):
     """
@@ -29,11 +31,9 @@ class DicomViewer(QMainWindow):
         # Setup scene and view
         self.multi_view = MultiViewWidget()
 
-        self.axial_scene = self.multi_view.axial_viewer.scene
-        self.axial_view = self.multi_view.axial_viewer.view
-
-        self.viewer_controller = ViewerController(self.axial_scene, self.axial_view)
-
+        self.viewer_controller = self.multi_view.axial_viewer.controller
+        self.coronal_controller = self.multi_view.coronal_viewer.controller
+        self.sagittal_controller = self.multi_view.sagittal_viewer.controller
 
         # Central widget
         main_layout = QVBoxLayout()
@@ -50,20 +50,6 @@ class DicomViewer(QMainWindow):
 
         main_layout.addLayout(top_row)
         main_layout.addLayout(bottom_row)
-
-        # for view in [self.axial_view, self.coronal_viewer, self.sagittal_view]:
-        #     view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
-        #     view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-
-        # self.scene = QGraphicsScene()
-        # self.graphics_view = QGraphicsView(self.scene)
-        # self.graphics_view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
-        # self.graphics_view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-
-        # Setup viewer controller (logic)
-        # self.viewer_controller = ViewerController(self.scene)
-
-        self.viewer_controller = ViewerController(self.axial_scene, self.axial_view)
 
         # Track sliders for cleanup
         self.layer_slider_rows = {}
@@ -148,6 +134,10 @@ class DicomViewer(QMainWindow):
         controls.addWidget(QLabel("Global Slice"))
         controls.addWidget(self.slice_slider)
 
+        # self.multi_view.axial_viewer.controller = self.axial_controller
+        # self.multi_view.coronal_viewer.controller = self.coronal_controller
+        # self.multi_view.sagittal_viewer.controller = self.sagittal_controller
+
         # Compose main layout
         viewer_layout = QVBoxLayout()
 
@@ -193,11 +183,11 @@ class DicomViewer(QMainWindow):
 
         name, layer, slider_rows = result
 
-            # Now load the same folder into coronal and sagittal without tracking sliders
-        self.multi_view.coronal_viewer.load_dicom_folder(folder)
-        self.multi_view.sagittal_viewer.load_dicom_folder(folder)
+        # Load into coronal and sagittal controllers explicitly, and get results if you want
+        self.coronal_controller.load_dicom_folder(folder)
+        self.sagittal_controller.load_dicom_folder(folder)
 
-            # Update UI with layer info from axial
+        self._extracted_from_on_layer_selected_27(0)
         self.layer_list.addItem(name)
         self.layer_list.setCurrentRow(self.layer_list.count() - 1)
         self.layer_slider_rows[name] = slider_rows
@@ -220,8 +210,14 @@ class DicomViewer(QMainWindow):
               Args:
                   index: The index of the newly selected layer.
               """
-        self.viewer_controller.select_layer(index)
+        self._extracted_from_on_layer_selected_27(index)
         self.update_layer_controls()
+
+    # TODO Rename this here and in `load_dicom` and `on_layer_selected`
+    def _extracted_from_on_layer_selected_27(self, arg0):
+        self.viewer_controller.select_layer(arg0)
+        self.coronal_controller.select_layer(arg0)
+        self.sagittal_controller.select_layer(arg0)
 
     def update_layer_controls(self):
         """
@@ -294,7 +290,10 @@ class DicomViewer(QMainWindow):
             This method updates the translation of the currently selected image layer
             in the viewer controller when the translation panel's offset is changed.
         """
-        self.viewer_controller.update_translation(offset)
+        print(f"Applying offset: {offset} to controllers")
+        for controller in [self.viewer_controller, self.coronal_controller, self.sagittal_controller]:
+            print(f"Controller {controller} selected layer index: {controller.selected_layer_index}")
+            controller.update_translation(offset)
 
     def reset_zoom(self):
         self.graphics_view.resetTransform()

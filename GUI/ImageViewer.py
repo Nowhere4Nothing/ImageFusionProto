@@ -1,25 +1,34 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene, QLabel, QSizePolicy
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene, QLabel, QSizePolicy, QSlider
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
+
+from Controller.viewer_controller import ViewerController
+
 
 class ImageViewer(QWidget):
     def __init__(self, title="Viewer"):
         super().__init__()
-        self.setWindowTitle(title)
 
         self.scene = QGraphicsScene()
         self.view = QGraphicsView(self.scene)
         self.view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
 
-        # Set fixed size or size policy
-        self.view.setMinimumSize(300, 300)
-        self.view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.slice_slider = QSlider(Qt.Horizontal)
+        self.slice_slider.setMinimum(0)
+        self.slice_slider.setMaximum(100)
+        self.slice_slider.setValue(50)
+        self.slice_slider.hide()
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel(title))
+        layout.addWidget(QLabel("Axial View"))
         layout.addWidget(self.view)
+        layout.addWidget(self.slice_slider)
         self.setLayout(layout)
+
+        # Assign the controller
+        self.controller = ViewerController(self.scene, self.view, view_type="axial")
+        self.controller.set_slice_slider(self.slice_slider)
 
     def display_image(self, qpixmap):
         # Scale pixmap to fit inside the view while keeping aspect ratio

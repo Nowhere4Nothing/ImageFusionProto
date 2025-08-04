@@ -147,6 +147,8 @@ def translate_image(img, x_offset, y_offset):
         result[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = img[src_y_start:src_y_end,
                                                                src_x_start:src_x_end]
 
+    print(f"Applying offset: x={x_offset}, y={y_offset}")
+
     return result
 
 def calculate_shift_coords(offset, length):

@@ -109,22 +109,37 @@ class ViewerController:
         self.update_display()
 
     def update_display(self):
+        # if not self.volume_layers:
+        #     self.scene.clear()
+        #     return
+        #
+        # img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
+        # h, w = img.shape
+        # qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
+        # pixmap = QPixmap.fromImage(qimage)
+        #
+        # self.scene.clear()
+        # pixmap_item = self.scene.addPixmap(pixmap)
+        #
+        # if not hasattr(self, "has_fit_once"):
+        #     self.view.fitInView(pixmap_item, Qt.KeepAspectRatio)
+        #     self.has_fit_once = True
+
         if not self.volume_layers:
             self.scene.clear()
             return
 
         img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
-
         h, w = img.shape
         qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
-        scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.AspectRatioMode.KeepAspectRatio)
 
         self.scene.clear()
-        pixmap_item = self.scene.addPixmap(scaled_pixmap)
+        pixmap_item = self.scene.addPixmap(pixmap)
 
-        # Fit the pixmap inside the view, keep aspect ratio
-        self.view.fitInView(pixmap_item, Qt.KeepAspectRatio)
+        # Fit view once after loading image to show full image:
+        self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+
 
     def update_global_slice_slider_range(self):
         if self.slice_slider is None:
@@ -184,6 +199,7 @@ class ViewerController:
         if self.selected_layer_index is None:
             return
         layer = self.volume_layers[self.selected_layer_index]
+        print(f"Setting layer.offset = {offset}")
         layer.offset = offset
         self.update_display()
 
