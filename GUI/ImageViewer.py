@@ -27,7 +27,7 @@ class ImageViewer(QWidget):
         self.setLayout(layout)
 
         # Assign the controller
-        self.controller = ViewerController(self.scene, self.view, view_type="axial")
+        self.controller = ViewerController(self.scene, self.view)
         self.controller.set_slice_slider(self.slice_slider)
 
     def display_image(self, qpixmap):

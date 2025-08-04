@@ -2,7 +2,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScen
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 
-from Controller.viewer_controller import ViewerController
+from Controller.viewer_controller_coronal import ViewerControllerCoronal
 
 class CoronalViewer(QWidget):
     def __init__(self, volume = None):
@@ -29,7 +29,7 @@ class CoronalViewer(QWidget):
         self.setLayout(layout)
 
         # Create ViewerController with view_type="coronal"
-        self.controller = ViewerController(self.scene, self.view, view_type="coronal")
+        self.controller = ViewerControllerCoronal(self.scene, self.view)
         self.controller.set_slice_slider(self.slice_slider)
 
     def load_dicom_folder(self, folder):
