@@ -108,31 +108,6 @@ def process_layers(volume_layers, slice_index, view_type):
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
-    # base_shape = volume_layers[0].data[0].shape
-    # img = np.zeros(base_shape, dtype=np.float32)
-    #
-    # for layer in volume_layers:
-    #     if not layer.visible:
-    #         continue
-    #
-    #     volume = layer.data.copy()
-    #
-    #     # Apply 3D rotation with SimpleITK
-    #     if any(r != 0 for r in layer.rotation):
-    #         volume = sitk_rotate_volume(volume, layer.rotation)
-    #
-    #     slice_idx = np.clip(slice_index + layer.slice_offset, 0, volume.shape[0] - 1)
-    #     overlay = volume[slice_idx]
-    #
-    #     # Apply translation without wraparound
-    #     x_offset, y_offset = layer.offset
-    #     shifted = translate_image(overlay, x_offset, y_offset)
-    #
-    #     # Blend into final image using layer opacity
-    #     img = img * (1 - layer.opacity) + shifted * layer.opacity
-    #
-    # return (np.clip(img, 0, 1) * 255).astype(np.uint8)
-
 def translate_image(img, x_offset, y_offset):
     """
     Shift a 2D image without wraparound, filling empty space with 0s.

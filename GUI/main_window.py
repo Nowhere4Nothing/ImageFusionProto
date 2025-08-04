@@ -1,20 +1,14 @@
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QPushButton,
-    QLabel, QListWidget, QGraphicsView, QGraphicsScene, QFileDialog, QVBoxLayout, QSlider, QGridLayout
+    QLabel, QListWidget,  QFileDialog, QVBoxLayout, QSlider,
 )
-from PySide6.QtGui import QPainter, QBrush, QColor
 from PySide6.QtCore import Qt
 
 from GUI.MultiViewWidget import MultiViewWidget
 from GUI.rotation_panel import RotationControlPanel
-from GUI.CoronalViewer import CoronalViewer
-from GUI.SagittalViewer import SagittalViewer
-from Controller.viewer_controller_Axial import ViewerController
 from GUI.translation_panel import TranslationControlPanel
 from GUI.extra_controls import ZoomControlPanel
 from utils.layer_loader import reset_opacity_and_offset
-from Controller.viewer_controller_coronal import ViewerControllerCoronal
-from Controller.viewer_controller_sagittal import ViewerControllerSagittal
 
 class DicomViewer(QMainWindow):
     """
