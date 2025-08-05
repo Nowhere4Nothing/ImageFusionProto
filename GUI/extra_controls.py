@@ -20,7 +20,7 @@ class ZoomControlPanel(QFrame):
         self.value_label = QLabel("1.0×")
 
         self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setRange(50, 300)  # Zoom from 0.5x to 3.0x
+        self.zoom_slider.setRange(20, 300)  # Zoom from 0.5x to 3.0x
         self.zoom_slider.setValue(100)      # Default 1.0x
 
         # Update text and emit callback

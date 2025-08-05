@@ -132,7 +132,9 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     layer.opacity_slider = opacity_slider
     layer.offset_slider = offset_slider
 
-    container_layout.addWidget(frame)
+    # container_layout.addWidget(frame)
+    if container_layout is not None:
+        container_layout.addWidget(frame)
 
     return layer, layer.name, [frame]
 
