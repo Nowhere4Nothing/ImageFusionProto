@@ -8,7 +8,7 @@ from utils.layer_loader import load_dicom_layer
 from Controller.base_view_controller import BaseViewerController
 
 
-class ViewerController(BaseViewerController):
+class ViewerControllerAxial(BaseViewerController):
     """
         Manages the logic and state for the DICOM image viewer.
 

@@ -1,4 +1,5 @@
 import numpy as np
+import cv2
 import SimpleITK as sitk
 
 def sitk_rotate_volume(volume, rotation_angles_deg):
@@ -104,7 +105,15 @@ def process_layers(volume_layers, slice_index, view_type):
 
         # Blend into final image using layer opacity
         opacity = getattr(layer, 'opacity', 1.0)
+        if img.shape != shifted.shape:
+            shifted = resize_to_match(shifted, img.shape)
+
+        def resize_to_match(base, target_shape):
+            return cv2.resize(base, (target_shape[1], target_shape[0]))
+
         img = img * (1 - opacity) + shifted * opacity
+
+
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 

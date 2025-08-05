@@ -2,13 +2,13 @@ from PySide6.QtWidgets import QWidget, QHBoxLayout
 
 from GUI.CoronalViewer import CoronalViewer
 from GUI.SagittalViewer import SagittalViewer
-from GUI.ImageViewer import ImageViewer
+from GUI.AxialViewer import AxialViewer
 
 class MultiViewWidget(QWidget):
     def __init__(self):
         super().__init__()
 
-        self.axial_viewer = ImageViewer("Axial View")
+        self.axial_viewer = AxialViewer()
         self.coronal_viewer = CoronalViewer()
         self.sagittal_viewer = SagittalViewer()
 
