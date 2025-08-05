@@ -95,11 +95,14 @@ class DicomViewer(QMainWindow):
         self.slice_slider.setMaximum(100)
         self.slice_slider.setValue(50)
 
-        # Connect slice slider to controller
+        # Connect all slice slider to controller
         self.axial_controller.set_slice_slider(self.slice_slider)
+        self.coronal_controller.set_slice_slider(self.slice_slider)
+        self.sagittal_controller.set_slice_slider(self.slice_slider)
+
+        self.slice_slider.valueChanged.connect(self.on_global_slice_changed)
 
         # Create slider container for opacity and offset sliders
-       
         self.slider_container = QVBoxLayout()
         self.axial_controller.set_slider_container(self.slider_container)
 
@@ -285,6 +288,12 @@ class DicomViewer(QMainWindow):
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom(1.0)
 
+    def on_global_slice_changed(self, value):
+        for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
+            # Adjust slice index relative to each controller's global offset
+            controller.slice_index = value - controller.global_slice_offset
+            controller.update_display()
+
     def on_zoom_changed(self, new_zoom):
         """
             Updates the zoom level of the graphics view based on the provided zoom factor.
@@ -359,12 +368,4 @@ class DicomViewer(QMainWindow):
             layer.offset_slider,
             update_display_cb=self.axial_controller.update_display
         )
-
-        # # Update the display
-        # controller.update_global_slice_slider_range()
-        # # index is still valid and active
-        # self.viewer_controller.selected_layer_index = index
-
-        #re-render for all images
-
 

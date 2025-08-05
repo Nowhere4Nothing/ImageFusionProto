@@ -3,25 +3,6 @@ import cv2
 import SimpleITK as sitk
 
 def sitk_rotate_volume(volume, rotation_angles_deg):
-    # # volume: numpy array (z, y, x)
-    # # rotation_angles_deg: [LR, PA, IS] in degrees
-    # # Map to SimpleITK Euler3DTransform: (alpha, beta, gamma) = (x, y, z)
-    # angles_rad = [np.deg2rad(a) for a in rotation_angles_deg]
-    # sitk_image = sitk.GetImageFromArray(volume)
-    # size = sitk_image.GetSize()  # (x, y, z)
-    # center = [s / 2.0 for s in size]  # (x, y, z) center in index space
-    # transform = sitk.Euler3DTransform()
-    # transform.SetCenter(center)
-    # # Set rotation: (alpha, beta, gamma) = (LR, PA, IS)
-    # transform.SetRotation(angles_rad[0], angles_rad[1], angles_rad[2])
-    # resampler = sitk.ResampleImageFilter()
-    # resampler.SetReferenceImage(sitk_image)
-    # resampler.SetInterpolator(sitk.sitkLinear)
-    # resampler.SetTransform(transform)
-    # resampler.SetDefaultPixelValue(0)
-    # rotated = resampler.Execute(sitk_image)
-    # return sitk.GetArrayFromImage(rotated)
-
     angles_rad = [np.deg2rad(a) for a in rotation_angles_deg]
     sitk_image = sitk.GetImageFromArray(volume)
     size = sitk_image.GetSize()  # (x, y, z)
