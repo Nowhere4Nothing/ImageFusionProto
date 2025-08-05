@@ -178,3 +178,17 @@ def _reset_slider_value(arg0, arg1):
     arg0.blockSignals(True)
     arg0.setValue(arg1)
     arg0.blockSignals(False)
+
+def highlight_selected_layer(volume_layers, selected_index):
+    for i, layer in enumerate(volume_layers):
+        if hasattr(layer, 'ui_container') and layer.ui_container:
+            if i == selected_index:
+                layer.ui_container.setStyleSheet(
+                    "border: 2px solid #0078d7; padding: 4px; border-radius: 5px;"
+                )
+            else:
+                layer.ui_container.setStyleSheet(
+                    "border: 1px solid gray; padding: 4px; border-radius: 5px;"
+                )
+
+

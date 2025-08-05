@@ -29,7 +29,6 @@ class BaseViewerController:
 
     def set_slice_slider(self, slider: QSlider):
         self.slice_slider = slider
-        self.slice_slider.valueChanged.connect(self.on_slice_change)
 
     def load_dicom_folder(self, folder):
         layer, name, slider_rows = load_dicom_layer(
@@ -144,3 +143,13 @@ class BaseViewerController:
 
     def reset_zoom(self):
         self.scene.views()[0].resetTransform()
+
+    def reset_global_slice_slider(self):
+        """
+        Resets the global slice slider to its initial position.
+        """
+        if self.slice_slider:
+            self.slice_slider.setValue(self.initial_slice_slider_value)
+            self.slice_index = self.slice_slider.value() - self.global_slice_offset
+            self.update_display()
+
