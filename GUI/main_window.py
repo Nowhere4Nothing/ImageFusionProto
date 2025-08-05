@@ -109,7 +109,6 @@ class DicomViewer(QMainWindow):
         # Compose controls layout
         controls = QVBoxLayout()
         controls.addWidget(self.load_btn)
-        # controls.addWidget(self.toggle_visibility_button)
         controls.addWidget(self.remove_button)
         controls.addWidget(QLabel("Select Layer:"))
         controls.addWidget(self.layer_list)

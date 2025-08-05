@@ -26,18 +26,28 @@ def load_dicom_volume(folder):
 
     if not slices:
         print("No valid DICOM slices.")
-        return None
+        return None, None
 
     try:
         slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
     except AttributeError:
         print("Some slices are missing ImagePositionPatient metadata.")
-        return None
+        return None, None
 
-    slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
+    # Stack images into volume
     volume = np.stack([s.pixel_array for s in slices]).astype(np.float32)
     volume -= volume.min()
     if volume.max() != 0:
         volume /= volume.max()
 
-    return volume
+    # === Extract voxel spacing (z, y, x) ===
+    ds0 = slices[0]
+    try:
+        pixel_spacing = [float(x) for x in ds0.PixelSpacing]  # [row, col] -> (y, x)
+        slice_thickness = float(ds0.SliceThickness)  # z
+        spacing = (slice_thickness, pixel_spacing[0], pixel_spacing[1])  # (z, y, x)
+    except AttributeError:
+        print("Missing spacing metadata. Using default spacing (1.0, 1.0, 1.0)")
+        spacing = (1.0, 1.0, 1.0)
+
+    return volume, spacing

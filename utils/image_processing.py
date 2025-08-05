@@ -37,18 +37,20 @@ def process_layers(volume_layers, slice_index, view_type):
       Returns:
           np.ndarray: The resulting 2D image as an 8-bit unsigned integer array.
       """
-
+    #default
+    global overlay
     if not volume_layers:
-        return np.zeros((512, 512), dtype=np.uint8)  # or another default size
+        return np.zeros((512, 512), dtype=np.uint8)
 
-        # Use first layer to infer base shape according to view type
+    print("ViewType:", view_type)
     base_vol = volume_layers[0].data
+    # Determine base_shape to match the actual extracted slice for each view
     if view_type == "axial":
-        base_shape = base_vol[0].shape
+        base_shape = (base_vol.shape[1], base_vol.shape[2])
     elif view_type == "coronal":
-        base_shape = (base_vol.shape[2], base_vol.shape[0])
-    elif view_type == "sagittal":
         base_shape = (base_vol.shape[1], base_vol.shape[0])
+    elif view_type == "sagittal":
+        base_shape = (base_vol.shape[2], base_vol.shape[0])
     else:
         raise ValueError(f"Unknown view type: {view_type}")
 
@@ -59,6 +61,8 @@ def process_layers(volume_layers, slice_index, view_type):
             continue
 
         volume = layer.data.copy()
+
+        print(f"Volume shape: {volume.shape}")
 
         # Apply 3D rotation with SimpleITK if rotation present
         if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])):
@@ -79,9 +83,12 @@ def process_layers(volume_layers, slice_index, view_type):
         if view_type == "axial":
             overlay = volume[slice_idx, :, :]
         elif view_type == "coronal":
-            overlay = volume[:, slice_idx, :].T
+            overlay = volume[:, slice_idx, :]
+            overlay = overlay.T  # (width, height) = (512, 118)
         elif view_type == "sagittal":
-            overlay = volume[:, :, slice_idx].T
+            overlay = volume[:, :, slice_idx]
+
+        print(f"Overlay shape before padding: {overlay.shape}")
 
         # Apply translation (XY plane)
         x_offset, y_offset = getattr(layer, 'offset', (0, 0))
@@ -89,12 +96,14 @@ def process_layers(volume_layers, slice_index, view_type):
 
         # Blend into final image using layer opacity
         opacity = getattr(layer, 'opacity', 1.0)
-        if img.shape != shifted.shape:
-            shifted = resize_to_match(shifted, img.shape)
 
         if img.shape != shifted.shape:
             shifted = resize_to_match(shifted, img.shape)
+
         img = img * (1 - opacity) + shifted * opacity
+
+    print(f"View: {view_type}, overlay shape: {overlay.shape}")
+    print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 

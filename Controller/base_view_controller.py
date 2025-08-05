@@ -5,6 +5,27 @@ from PySide6.QtWidgets import QSlider
 from utils.image_processing import process_layers
 from utils.layer_loader import load_dicom_layer
 
+
+def resample_volume_to_isotropic(volume, spacing, new_spacing=1.0):
+    import SimpleITK as sitk
+    sitk_image = sitk.GetImageFromArray(volume)
+    original_spacing = spacing  # tuple (sx, sy, sz)
+    original_size = sitk_image.GetSize()
+
+    new_size = [
+        int(round(original_size[0] * (original_spacing[0] / new_spacing))),
+        int(round(original_size[1] * (original_spacing[1] / new_spacing))),
+        int(round(original_size[2] * (original_spacing[2] / new_spacing))),
+    ]
+
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetOutputSpacing((new_spacing, new_spacing, new_spacing))
+    resampler.SetSize(new_size)
+    resampler.SetInterpolator(sitk.sitkLinear)
+    resampled_image = resampler.Execute(sitk_image)
+    return sitk.GetArrayFromImage(resampled_image)
+
+
 class BaseViewerController:
     def __init__(self, view, scene, view_type):
         self.view = view
@@ -94,10 +115,19 @@ class BaseViewerController:
         h, w = img.shape
         qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
-        scaled_pixmap = pixmap.scaled(pixmap.width() * 2, pixmap.height() * 2, Qt.KeepAspectRatio)
 
         self.scene.clear()
-        self.scene.addPixmap(scaled_pixmap)
+        pixmap_item = self.scene.addPixmap(pixmap)
+
+        # Set scene rect exactly to pixmap size
+        self.scene.setSceneRect(pixmap_item.boundingRect())
+
+        print(f"Pixmap size: {pixmap.width()}x{pixmap.height()}")
+        print(f"View viewport size: {self.view.viewport().size()}")
+        print(f"Scene rect: {self.scene.sceneRect()}")
+        # Fit the scene in the view to avoid clipping
+        self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
 
     def update_global_slice_slider_range(self):
         if not self.volume_layers or not self.slice_slider:
@@ -152,4 +182,5 @@ class BaseViewerController:
             self.slice_slider.setValue(self.initial_slice_slider_value)
             self.slice_index = self.slice_slider.value() - self.global_slice_offset
             self.update_display()
+
 

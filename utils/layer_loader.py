@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt
 from volume_layer import VolumeLayer
 from utils.dicom_loader import load_dicom_volume
 
+# import SimpleITK as sitk
+
 def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_callback, container_layout):
     slider.setValue(default_value)
     row = QHBoxLayout()
@@ -63,11 +65,23 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         Returns:
             tuple: (layer, layer name, list of control frames) if successful, otherwise (None, None, []).
         """
-    volume = load_dicom_volume(folder)
+    volume,spacing = load_dicom_volume(folder)
+
+    if volume is None:
+        return None, None, []
+    #
+    layer = VolumeLayer(volume, os.path.basename(folder))
+    #
+    # volume = load_volume_with_orientation(folder)
+    # layer.data = volume
+    #
+    # volume = load_volume_with_orientation(folder)
+
     if volume is None:
         return None, None, []
 
     layer = VolumeLayer(volume, os.path.basename(folder))
+    layer.spacing = spacing
 
     # Create a frame to contain this layer's controls
     frame = QFrame()
@@ -191,4 +205,33 @@ def highlight_selected_layer(volume_layers, selected_index):
                     "border: 1px solid gray; padding: 4px; border-radius: 5px;"
                 )
 
+# def load_volume_with_orientation(dicom_folder):
+#     reader = sitk.ImageSeriesReader()
+#     series_IDs = reader.GetGDCMSeriesIDs(dicom_folder)
+#     if not series_IDs:
+#         raise ValueError("No DICOM series found.")
+#     series_files = reader.GetGDCMSeriesFileNames(dicom_folder, series_IDs[0])
+#     reader.SetFileNames(series_files)
+#     sitk_image = reader.Execute()
+#
+#     # Reorient to LPS for standard patient orientation
+#     sitk_image = sitk.DICOMOrient(sitk_image, 'LPS')
+#
+#     # Resample to isotropic spacing
+#     spacing = sitk_image.GetSpacing()
+#     min_spacing = min(spacing)
+#     new_spacing = [min_spacing] * 3
+#     new_size = [int(round(sz * sp / min_spacing)) for sz, sp in zip(sitk_image.GetSize(), spacing)]
+#
+#     resampler = sitk.ResampleImageFilter()
+#     resampler.SetOutputSpacing(new_spacing)
+#     resampler.SetSize(new_size)
+#     resampler.SetOutputDirection(sitk_image.GetDirection())
+#     resampler.SetOutputOrigin(sitk_image.GetOrigin())
+#     resampler.SetInterpolator(sitk.sitkLinear)
+#     resampler.SetDefaultPixelValue(0)
+#     resampler.SetReferenceImage(sitk_image)
+#
+#     sitk_resampled = resampler.Execute(sitk_image)
+#     return sitk.GetArrayFromImage(sitk_resampled)
 
