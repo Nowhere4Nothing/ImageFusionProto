@@ -19,10 +19,9 @@ class TranslationControlPanel(QFrame):
         self.sliders = []
         self.labels = []
 
-        #TODO The Z axis does not work yet fix
-        for i, axis in enumerate(['x', 'y']):
+        for i, axis in enumerate(['x', 'y', 'z']):
             row = QHBoxLayout()
-            label = QLabel(f"Axis {axis} Offset:")
+            label = QLabel(f"Axis {axis.upper()} Offset:")
             value_label = QLabel("0 px")
 
             slider = QSlider(Qt.Horizontal)
@@ -42,16 +41,14 @@ class TranslationControlPanel(QFrame):
             layout.addLayout(row)
             self.sliders.append(slider)
             self.labels.append(value_label)
-
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("border:1px solid gray; padding:4px; border-radius:5px;")
-
 
     def on_offset_change(self, axis_index, value):
         """
             Handles changes to the translation offset sliders and notifies the callback.
 
-            When a slider value changes, this method collects the current x and y offsets and
+            When a slider value changes, this method collects the current x, y, z offsets and
             calls the registered offset_changed_callback with the new values.
 
             Args:
@@ -59,25 +56,25 @@ class TranslationControlPanel(QFrame):
                 value: The new value of the changed slider.
         """
         if self.offset_changed_callback:
-            # offset is (x, y)
             x = self.sliders[0].value()
             y = self.sliders[1].value()
-            self.offset_changed_callback((x, y))
+            z = self.sliders[2].value()
+            self.offset_changed_callback((x, y, z))
 
     def set_offset_changed_callback(self, callback):
         self.offset_changed_callback = callback
 
     def set_offsets(self, offsets):
         """
-            Sets the x and y offset slider values to the provided offsets.
+            Sets the x, y, z offset slider values to the provided offsets.
 
-            This method updates the slider positions for the x and y axes without
+            This method updates the slider positions for the x, y, z axes without
             emitting value changed signals.
 
             Args:
-                offsets: A tuple or list containing the new x and y offset values.
+                offsets: A tuple or list containing the new x, y, z offset values.
         """
-        for i in range(2):
+        for i in range(3):
             self.sliders[i].blockSignals(True)
             self.sliders[i].setValue(offsets[i])
             self.sliders[i].blockSignals(False)
