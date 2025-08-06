@@ -99,11 +99,7 @@ class BaseViewerController:
         if self.selected_layer_index is None:
             return
         layer = self.volume_layers[self.selected_layer_index]
-        # Ensure offset is always [x, y, z]
-        if len(offset) == 2:
-            layer.offset = [offset[0], offset[1], 0]
-        else:
-            layer.offset = list(offset)
+        layer.offset = offset
         self.update_display()
 
     def on_slice_change(self, value):

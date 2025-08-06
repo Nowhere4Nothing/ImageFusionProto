@@ -158,24 +158,11 @@ def create_opacity_slider():
     slider.setMaximum(100)
     return slider
 
-def create_slice_offset_slider(volume, current_slice_index=0):
+def create_slice_offset_slider(volume):
     slider = QSlider(Qt.Orientation.Horizontal)
-    # Allow offset so that (current_slice_index + offset) is always in [0, volume.shape[0]-1]
-    min_offset = -current_slice_index
-    max_offset = volume.shape[0] - 1 - current_slice_index
-    slider.setMinimum(min_offset)
-    slider.setMaximum(max_offset)
-    slider.setValue(0)  # Always start at 0 (no offset from current slice)
+    slider.setMinimum(-volume.shape[0] + 1)
+    slider.setMaximum(volume.shape[0] - 1)
     return slider
-
-def update_slice_offset_slider_range(slider, volume, current_slice_index):
-    min_offset = -current_slice_index
-    max_offset = volume.shape[0] - 1 - current_slice_index
-    slider.setMinimum(min_offset)
-    slider.setMaximum(max_offset)
-    # Optionally, keep the slider value within the new range
-    if slider.value() < min_offset or slider.value() > max_offset:
-        slider.setValue(0)
 
 def reset_opacity_and_offset(layer, opacity_slider, offset_slider, update_display_cb=None):
     """

@@ -1,4 +1,4 @@
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene, QSlider, QLabel, QSizePolicy
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QGraphicsView, QGraphicsScene, QSlider, QLabel
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QPainter
 
@@ -14,7 +14,6 @@ class SagittalViewer(QWidget):
 
         self.view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
-        self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
