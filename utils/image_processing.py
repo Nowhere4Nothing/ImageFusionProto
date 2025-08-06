@@ -62,7 +62,7 @@ def process_layers(volume_layers, slice_index, view_type):
 
         volume = layer.data.copy()
 
-        print(f"Volume shape: {volume.shape}")
+        # print(f"Volume shape: {volume.shape}")
 
         # Apply 3D rotation with SimpleITK if rotation present
         if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])):
@@ -83,22 +83,27 @@ def process_layers(volume_layers, slice_index, view_type):
             overlay = volume[:, :, slice_index].T
             overlay = np.rot90(overlay, k=2)
 
-        print(f"Overlay shape before padding: {overlay.shape}")
+        # print(f"Overlay shape before padding: {overlay.shape}")
 
-        # Apply translation (XY plane)
+        # # Apply translation (XY plane)
+        overlay = overlay.astype(np.float32)
+        if overlay.max() > 1.0:
+            overlay /= 255.0
+
         x_offset, y_offset = getattr(layer, 'offset', (0, 0))
-        shifted = translate_image(overlay, x_offset, y_offset)
+        overlay = translate_image(overlay, x_offset, y_offset)
 
-        # Blend into final image using layer opacity
-        opacity = getattr(layer, 'opacity', 1.0)
+        # Apply opacity blend
+        opacity = np.clip(getattr(layer, 'opacity', 1.0), 0.0, 1.0)
+        print(f"Layer: {layer.name}, opacity: {opacity}, overlay max: {overlay.max():.3f}, min: {overlay.min():.3f}")
 
-        if img.shape != shifted.shape:
-            shifted = resize_to_match(shifted, img.shape)
+        if img.shape != overlay.shape:
+            overlay = resize_to_match(overlay, img.shape)
+            print(f"Resized overlay from {overlay.shape} to {img.shape}")
 
-        img = img * (1 - opacity) + shifted * opacity
-
-    print(f"View: {view_type}, overlay shape: {overlay.shape}")
-    print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
+        img = img * (1 - opacity) + overlay * opacity
+    # print(f"View: {view_type}, overlay shape: {overlay.shape}")
+    # print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 

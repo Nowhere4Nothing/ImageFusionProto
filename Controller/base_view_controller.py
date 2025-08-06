@@ -73,6 +73,7 @@ class BaseViewerController:
         if self.slice_slider:
             self.initial_slice_slider_value = self.slice_slider.value()
 
+
         layer = self.volume_layers[self.selected_layer_index]
         depth = (
             layer.data.shape[0] if self.view_type == "axial" else
@@ -89,7 +90,8 @@ class BaseViewerController:
         return name, layer, slider_rows
 
     def update_opacity(self, layer, value):
-        layer.opacity = value / 100.0
+        print(f"Opacity value raw: {value}")
+        layer.opacity = value /100
         self.update_display()
 
     def update_slice_offset(self, layer, value):
@@ -156,9 +158,9 @@ class BaseViewerController:
         self.view.setAlignment(Qt.AlignCenter)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
-        print(f"{self.view_type.title()} pixmap size: {pixmap.width()}x{pixmap.height()}")
-        print(f"View viewport size: {self.view.viewport().size()}")
-        print(f"Scene rect: {self.scene.sceneRect()}")
+        # print(f"{self.view_type.title()} pixmap size: {pixmap.width()}x{pixmap.height()}")
+        # print(f"View viewport size: {self.view.viewport().size()}")
+        # print(f"Scene rect: {self.scene.sceneRect()}")
 
 
     def update_global_slice_slider_range(self):
@@ -232,3 +234,4 @@ class BaseViewerController:
             self.slice_slider.setValue(self.initial_slice_slider_value)
             self.slice_index = self.slice_slider.value() - self.global_slice_offset
             self.update_display()
+
