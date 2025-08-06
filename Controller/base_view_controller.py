@@ -1,7 +1,7 @@
+import numpy as np
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QSlider
-
 from utils.image_processing import process_layers
 from utils.layer_loader import load_dicom_layer
 
@@ -73,13 +73,25 @@ class BaseViewerController:
         if self.slice_slider:
             self.initial_slice_slider_value = self.slice_slider.value()
 
+
+        layer = self.volume_layers[self.selected_layer_index]
+        depth = (
+            layer.data.shape[0] if self.view_type == "axial" else
+            layer.data.shape[1] if self.view_type == "coronal" else
+            layer.data.shape[2]
+        )
+        self.slice_index = depth // 2
+        if self.slice_slider:
+            self.slice_slider.setValue(self.slice_index + self.global_slice_offset)
+
         self.update_global_slice_slider_range()
         self.update_display()
 
         return name, layer, slider_rows
 
     def update_opacity(self, layer, value):
-        layer.opacity = value / 100.0
+        print(f"Opacity value raw: {value}")
+        layer.opacity = value /100
         self.update_display()
 
     def update_slice_offset(self, layer, value):
@@ -111,31 +123,71 @@ class BaseViewerController:
             self.scene.clear()
             return
 
+        layer = self.volume_layers[self.selected_layer_index]
+        max_slice = (
+            layer.data.shape[0] if self.view_type == "axial" else
+            layer.data.shape[1] if self.view_type == "coronal" else
+            layer.data.shape[2]
+        )
+        clamped_index = np.clip(self.slice_index, 0, max_slice - 1)
+
+        if self.slice_index != clamped_index:
+            print(f"Clamping {self.view_type} index from {self.slice_index} to {clamped_index}")
+            self.slice_index = clamped_index
+
         img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
-        h, w = img.shape
-        qimage = QImage(img.data, w, h, w, QImage.Format.Format_Grayscale8)
+
+        # Normalize to 0-255 for grayscale QImage
+        img = (img - img.min()) / (img.max() - img.min() + 1e-8)
+        img = (img * 255).astype(np.uint8)
+
+        height, width = img.shape
+        qimage = QImage(img.data, width, height, width, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
 
         self.scene.clear()
         pixmap_item = self.scene.addPixmap(pixmap)
-
-        # Set scene rect exactly to pixmap size
         self.scene.setSceneRect(pixmap_item.boundingRect())
 
-        print(f"Pixmap size: {pixmap.width()}x{pixmap.height()}")
-        print(f"View viewport size: {self.view.viewport().size()}")
-        print(f"Scene rect: {self.scene.sceneRect()}")
-        # Fit the scene in the view to avoid clipping
+        # if self.view_type == "sagittal":
+        #     # No padding, left-aligned
+        #     self.view.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        #     self.view.resetTransform()  # No fitInView scaling
+        # else:
+            # Centered and scaled
+        self.view.setAlignment(Qt.AlignCenter)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
+
+        # print(f"{self.view_type.title()} pixmap size: {pixmap.width()}x{pixmap.height()}")
+        # print(f"View viewport size: {self.view.viewport().size()}")
+        # print(f"Scene rect: {self.scene.sceneRect()}")
 
 
     def update_global_slice_slider_range(self):
         if not self.volume_layers or not self.slice_slider:
             return
 
-        min_index = min(0 + l.slice_offset for l in self.volume_layers)
-        max_index = max((l.data.shape[0] - 1) + l.slice_offset for l in self.volume_layers)
+        min_index = float('inf')
+        max_index = float('-inf')
 
+        for layer in self.volume_layers:
+            if self.view_type == "axial":
+                dim = layer.data.shape[0]
+            elif self.view_type == "coronal":
+                dim = layer.data.shape[1]
+            elif self.view_type == "sagittal":
+                dim = layer.data.shape[2]
+            else:
+                continue
+
+            offset = getattr(layer, 'slice_offset', 0)
+            layer_min = offset
+            layer_max = dim - 1 + offset
+
+            min_index = min(min_index, layer_min)
+            max_index = max(max_index, layer_max)
+
+        # Compute offset so slider starts at slice 0
         self.global_slice_offset = -min_index
         slider_min = 0
         slider_max = max_index - min_index
@@ -182,5 +234,4 @@ class BaseViewerController:
             self.slice_slider.setValue(self.initial_slice_slider_value)
             self.slice_index = self.slice_slider.value() - self.global_slice_offset
             self.update_display()
-
 

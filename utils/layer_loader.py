@@ -47,7 +47,11 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
 
     return row, slider, value_label
 
-def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_cb, update_display_cb=None):
+def load_dicom_layer( folder,
+    container_layout,
+    update_opacity_cb,
+    update_offset_cb,
+    update_display_cb=None,):
     """
         Loads a DICOM volume from the specified folder and creates a new image layer with UI controls.
 
@@ -71,11 +75,6 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
         return None, None, []
     #
     layer = VolumeLayer(volume, os.path.basename(folder))
-    #
-    # volume = load_volume_with_orientation(folder)
-    # layer.data = volume
-    #
-    # volume = load_volume_with_orientation(folder)
 
     if volume is None:
         return None, None, []
@@ -122,7 +121,6 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     checkbox.toggled.connect(on_toggle)
     layout.addWidget(checkbox)
 
-    # Setup sliders
     opacity_slider = create_opacity_slider()
     setup_slider_ui(
         opacity_slider,
@@ -150,12 +148,14 @@ def load_dicom_layer(folder, container_layout, update_opacity_cb, update_offset_
     if container_layout is not None:
         container_layout.addWidget(frame)
 
+
+
     return layer, layer.name, [frame]
 
 def create_opacity_slider():
     slider = QSlider(Qt.Orientation.Horizontal)
-    slider.setMinimum(1)
-    slider.setMaximum(100)
+    slider.setMinimum(0)
+    slider.setMaximum(10)
     return slider
 
 def create_slice_offset_slider(volume):
@@ -205,33 +205,5 @@ def highlight_selected_layer(volume_layers, selected_index):
                     "border: 1px solid gray; padding: 4px; border-radius: 5px;"
                 )
 
-# def load_volume_with_orientation(dicom_folder):
-#     reader = sitk.ImageSeriesReader()
-#     series_IDs = reader.GetGDCMSeriesIDs(dicom_folder)
-#     if not series_IDs:
-#         raise ValueError("No DICOM series found.")
-#     series_files = reader.GetGDCMSeriesFileNames(dicom_folder, series_IDs[0])
-#     reader.SetFileNames(series_files)
-#     sitk_image = reader.Execute()
-#
-#     # Reorient to LPS for standard patient orientation
-#     sitk_image = sitk.DICOMOrient(sitk_image, 'LPS')
-#
-#     # Resample to isotropic spacing
-#     spacing = sitk_image.GetSpacing()
-#     min_spacing = min(spacing)
-#     new_spacing = [min_spacing] * 3
-#     new_size = [int(round(sz * sp / min_spacing)) for sz, sp in zip(sitk_image.GetSize(), spacing)]
-#
-#     resampler = sitk.ResampleImageFilter()
-#     resampler.SetOutputSpacing(new_spacing)
-#     resampler.SetSize(new_size)
-#     resampler.SetOutputDirection(sitk_image.GetDirection())
-#     resampler.SetOutputOrigin(sitk_image.GetOrigin())
-#     resampler.SetInterpolator(sitk.sitkLinear)
-#     resampler.SetDefaultPixelValue(0)
-#     resampler.SetReferenceImage(sitk_image)
-#
-#     sitk_resampled = resampler.Execute(sitk_image)
-#     return sitk.GetArrayFromImage(sitk_resampled)
+
 

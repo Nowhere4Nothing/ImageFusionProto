@@ -62,48 +62,48 @@ def process_layers(volume_layers, slice_index, view_type):
 
         volume = layer.data.copy()
 
-        print(f"Volume shape: {volume.shape}")
+        # print(f"Volume shape: {volume.shape}")
 
         # Apply 3D rotation with SimpleITK if rotation present
         if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])):
             volume = sitk_rotate_volume(volume, layer.rotation)
 
         # Calculate adjusted slice index with offset, clipped to valid range
-        max_slice_index = None
         if view_type == "axial":
             max_slice_index = volume.shape[0] - 1
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[slice_index, :, :]
         elif view_type == "coronal":
             max_slice_index = volume.shape[1] - 1
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[:, slice_index, :].T
         elif view_type == "sagittal":
             max_slice_index = volume.shape[2] - 1
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[:, :, slice_index].T
+            overlay = np.rot90(overlay, k=2)
 
-        slice_idx = np.clip(slice_index + getattr(layer, 'slice_offset', 0), 0, max_slice_index)
+        # print(f"Overlay shape before padding: {overlay.shape}")
 
-        # Extract 2D slice according to view type
-        if view_type == "axial":
-            overlay = volume[slice_idx, :, :]
-        elif view_type == "coronal":
-            overlay = volume[:, slice_idx, :]
-            overlay = overlay.T  # (width, height) = (512, 118)
-        elif view_type == "sagittal":
-            overlay = volume[:, :, slice_idx]
+        # # Apply translation (XY plane)
+        overlay = overlay.astype(np.float32)
+        if overlay.max() > 1.0:
+            overlay /= 255.0
 
-        print(f"Overlay shape before padding: {overlay.shape}")
-
-        # Apply translation (XY plane)
         x_offset, y_offset = getattr(layer, 'offset', (0, 0))
-        shifted = translate_image(overlay, x_offset, y_offset)
+        overlay = translate_image(overlay, x_offset, y_offset)
 
-        # Blend into final image using layer opacity
-        opacity = getattr(layer, 'opacity', 1.0)
+        # Apply opacity blend
+        opacity = np.clip(getattr(layer, 'opacity', 1.0), 0.0, 1.0)
+        print(f"Layer: {layer.name}, opacity: {opacity}, overlay max: {overlay.max():.3f}, min: {overlay.min():.3f}")
 
-        if img.shape != shifted.shape:
-            shifted = resize_to_match(shifted, img.shape)
+        if img.shape != overlay.shape:
+            overlay = resize_to_match(overlay, img.shape)
+            print(f"Resized overlay from {overlay.shape} to {img.shape}")
 
-        img = img * (1 - opacity) + shifted * opacity
-
-    print(f"View: {view_type}, overlay shape: {overlay.shape}")
-    print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
+        img = img * (1 - opacity) + overlay * opacity
+    # print(f"View: {view_type}, overlay shape: {overlay.shape}")
+    # print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
@@ -148,3 +148,5 @@ def calculate_shift_coords(offset, length):
         dst_end = src_end - src_start
 
     return src_start, src_end, dst_start, dst_end
+
+
