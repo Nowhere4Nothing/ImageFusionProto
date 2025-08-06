@@ -69,24 +69,19 @@ def process_layers(volume_layers, slice_index, view_type):
             volume = sitk_rotate_volume(volume, layer.rotation)
 
         # Calculate adjusted slice index with offset, clipped to valid range
-        max_slice_index = None
         if view_type == "axial":
             max_slice_index = volume.shape[0] - 1
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[slice_index, :, :]
         elif view_type == "coronal":
             max_slice_index = volume.shape[1] - 1
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[:, slice_index, :].T
         elif view_type == "sagittal":
             max_slice_index = volume.shape[2] - 1
-
-        slice_idx = np.clip(slice_index + getattr(layer, 'slice_offset', 0), 0, max_slice_index)
-
-        # Extract 2D slice according to view type
-        if view_type == "axial":
-            overlay = volume[slice_idx, :, :]
-        elif view_type == "coronal":
-            overlay = volume[:, slice_idx, :]
-            overlay = overlay.T  # (width, height) = (512, 118)
-        elif view_type == "sagittal":
-            overlay = volume[:, :, slice_idx]
+            slice_index = np.clip(slice_index, 0, max_slice_index)
+            overlay = volume[:, :, slice_index].T
+            overlay = np.rot90(overlay, k=2)
 
         print(f"Overlay shape before padding: {overlay.shape}")
 
@@ -148,3 +143,5 @@ def calculate_shift_coords(offset, length):
         dst_end = src_end - src_start
 
     return src_start, src_end, dst_start, dst_end
+
+

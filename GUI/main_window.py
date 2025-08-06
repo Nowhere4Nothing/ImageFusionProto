@@ -142,10 +142,9 @@ class DicomViewer(QMainWindow):
 
         # Bottom row with Sagittal view centered
         bottom_row = QHBoxLayout()
-        bottom_row.addStretch()
         bottom_row.addWidget(self.multi_view.sagittal_viewer)
-        bottom_row.addStretch()
         viewer_layout.addLayout(bottom_row)
+        bottom_row.addStretch()
 
         main_layout = QHBoxLayout()
         main_layout.addLayout(controls, 2)
