@@ -5,13 +5,7 @@ import SimpleITK as sitk
 def resize_to_match(base, target_shape):
     return cv2.resize(base, (target_shape[1], target_shape[0]))
 
-def sitk_transform_volume(volume, rotation_angles_deg, translation_px, spacing=(1.0, 1.0, 1.0)):
-    """
-    Apply rotation and translation to a 3D numpy volume using SimpleITK.
-    rotation_angles_deg: [LR, PA, IS] in degrees
-    translation_px: [x, y, z] in pixels (x=LR, y=PA, z=IS)
-    spacing: voxel spacing (z, y, x)
-    """
+def sitk_rotate_volume(volume, rotation_angles_deg):
     angles_rad = [np.deg2rad(a) for a in rotation_angles_deg]
     sitk_image = sitk.GetImageFromArray(volume)
     size = sitk_image.GetSize()  # (x, y, z)
@@ -20,28 +14,16 @@ def sitk_transform_volume(volume, rotation_angles_deg, translation_px, spacing=(
     # Compute center in physical coordinates
     center_phys = [origin[i] + spacing[i] * size[i] / 2.0 for i in range(3)]
 
-    # Convert translation from pixels to physical units (x, y, z)
-    # spacing: (x, y, z) in SimpleITK, but from DICOM loader it's (z, y, x)
-    # So: spacing_sitk = (spacing[2], spacing[1], spacing[0])
-    spacing_sitk = (spacing[2], spacing[1], spacing[0])
-    translation_phys = [
-        translation_px[0] * spacing_sitk[0],
-        translation_px[1] * spacing_sitk[1],
-        translation_px[2] * spacing_sitk[2],
-    ]
-
     transform = sitk.Euler3DTransform()
     transform.SetCenter(center_phys)
     transform.SetRotation(angles_rad[0], angles_rad[1], angles_rad[2])
-    transform.SetTranslation(translation_phys)
-
     resampler = sitk.ResampleImageFilter()
     resampler.SetReferenceImage(sitk_image)
     resampler.SetInterpolator(sitk.sitkLinear)
     resampler.SetTransform(transform)
     resampler.SetDefaultPixelValue(0)
-    transformed = resampler.Execute(sitk_image)
-    return sitk.GetArrayFromImage(transformed)
+    rotated = resampler.Execute(sitk_image)
+    return sitk.GetArrayFromImage(rotated)
 
 def process_layers(volume_layers, slice_index, view_type):
     """
@@ -62,8 +44,17 @@ def process_layers(volume_layers, slice_index, view_type):
 
     print("ViewType:", view_type)
     base_vol = volume_layers[0].data
-    # We'll set base_shape after extracting the overlay for each view
-    img = None
+    # Determine base_shape to match the actual extracted slice for each view
+    if view_type == "axial":
+        base_shape = (base_vol.shape[1], base_vol.shape[2])
+    elif view_type == "coronal":
+        base_shape = (base_vol.shape[1], base_vol.shape[0])
+    elif view_type == "sagittal":
+        base_shape = (base_vol.shape[2], base_vol.shape[0])
+    else:
+        raise ValueError(f"Unknown view type: {view_type}")
+
+    img = np.zeros(base_shape, dtype=np.float32)
 
     for layer in volume_layers:
         if not getattr(layer, 'visible', True):
@@ -71,38 +62,37 @@ def process_layers(volume_layers, slice_index, view_type):
 
         volume = layer.data.copy()
 
-        # Compose translation vector: [x, y, z] in pixels
-        offset = getattr(layer, 'offset', (0, 0))
-        slice_offset = getattr(layer, 'slice_offset', 0)
-        translation_px = [offset[0], offset[1], slice_offset]
+        print(f"Volume shape: {volume.shape}")
 
-        # Apply 3D rotation and translation with SimpleITK
-        if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])) or any(translation_px):
-            spacing = getattr(layer, 'spacing', (1.0, 1.0, 1.0))
-            volume = sitk_transform_volume(volume, layer.rotation, translation_px, spacing)
+        # Apply 3D rotation with SimpleITK if rotation present
+        if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])):
+            volume = sitk_rotate_volume(volume, layer.rotation)
 
         # Calculate adjusted slice index with offset, clipped to valid range
+        max_slice_index = None
         if view_type == "axial":
             max_slice_index = volume.shape[0] - 1
-            slice_idx = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[slice_idx, :, :]  # (y, x)
         elif view_type == "coronal":
             max_slice_index = volume.shape[1] - 1
-            slice_idx = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[:, slice_idx, :]  # (z, x)
-            overlay = np.rot90(overlay, k=2)  # 90 deg CW
         elif view_type == "sagittal":
             max_slice_index = volume.shape[2] - 1
-            slice_idx = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[:, :, slice_idx]  # (z, y)
-            overlay = np.rot90(overlay, k=2)  # 90 deg CW
 
-        # Set base_shape on first valid overlay
-        if img is None:
-            img = np.zeros(overlay.shape, dtype=np.float32)
+        slice_idx = np.clip(slice_index + getattr(layer, 'slice_offset', 0), 0, max_slice_index)
 
-        # No need for 2D translation; already handled in 3D
-        shifted = overlay
+        # Extract 2D slice according to view type
+        if view_type == "axial":
+            overlay = volume[slice_idx, :, :]
+        elif view_type == "coronal":
+            overlay = volume[:, slice_idx, :]
+            overlay = overlay.T  # (width, height) = (512, 118)
+        elif view_type == "sagittal":
+            overlay = volume[:, :, slice_idx]
+
+        print(f"Overlay shape before padding: {overlay.shape}")
+
+        # Apply translation (XY plane)
+        x_offset, y_offset = getattr(layer, 'offset', (0, 0))
+        shifted = translate_image(overlay, x_offset, y_offset)
 
         # Blend into final image using layer opacity
         opacity = getattr(layer, 'opacity', 1.0)
@@ -112,9 +102,8 @@ def process_layers(volume_layers, slice_index, view_type):
 
         img = img * (1 - opacity) + shifted * opacity
 
-    if img is None:
-        # No visible layers, return a default square
-        img = np.zeros((512, 512), dtype=np.float32)
+    print(f"View: {view_type}, overlay shape: {overlay.shape}")
+    print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
 
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
 
