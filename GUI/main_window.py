@@ -23,7 +23,7 @@ class DicomViewer(QMainWindow):
         self.slider_container = None
         self.setWindowTitle("manual image fusion example")
 
-        # Setup scene and view
+        # Setup scene and multiview
         self.multi_view = MultiViewWidget()
 
         self.axial_controller = self.multi_view.axial_viewer.controller
@@ -35,7 +35,7 @@ class DicomViewer(QMainWindow):
 
         # Top row: axial + coronal side-by-side
         top_row = QHBoxLayout()
-        top_row.addWidget(self.multi_view.axial_viewer)  # QGraphicsView widget
+        top_row.addWidget(self.multi_view.axial_viewer)
         top_row.addWidget(self.multi_view.coronal_viewer)
 
         bottom_row = QHBoxLayout()
@@ -59,9 +59,6 @@ class DicomViewer(QMainWindow):
         self.remove_button = QPushButton("Remove Current Layer")
         self.remove_button.clicked.connect(self.remove_current_layer)
 
-        self.toggle_visibility_button = QPushButton("Hide Current Layer")
-        # TODO: Connect toggle visibility logic if needed
-
         self.reset_sliders_button = QPushButton("Reset Sliders")
         self.reset_sliders_button.clicked.connect(self.reset_layer_controls)
 
@@ -78,7 +75,7 @@ class DicomViewer(QMainWindow):
 
         self.rt_dose_layer = None
 
-        self.slice_slider = None  # will be set in setup_ui
+        self.slice_slider = None
 
         self.setup_ui()
 
@@ -150,6 +147,7 @@ class DicomViewer(QMainWindow):
         main_layout.addLayout(controls, 2)
         main_layout.addLayout(viewer_layout, 5)
 
+        # Add to the container
         container = QWidget()
         container.setLayout(main_layout)
         self.setCentralWidget(container)
@@ -158,8 +156,8 @@ class DicomViewer(QMainWindow):
         """
             Loads a DICOM folder and adds it as a new layer to the viewer.
 
-            Prompts the user to select a DICOM folder, loads the volume using the viewer controller,
-            and updates the layer list and controls if successful.
+            Prompts the user to select a DICOM folder, loads the volume using the viewer
+            controller, and updates the layer list and controls if successful.
 
             Returns:
                 None
@@ -189,12 +187,15 @@ class DicomViewer(QMainWindow):
         """
               Handles the event when a new layer is selected in the layer list.
 
-              Updates the selected layer in the viewer controller and refreshes the layer controls accordingly.
+              Updates the selected layer in the viewer controller and refreshes the layer
+              controls accordingly.
 
               Args:
                   index: The index of the newly selected layer.
               """
+        # Getting all images and putting them in the selected layer
         self._extracted_from_on_layer_selected_27(index)
+        # Adding the highlighted border for teh corresponding layer
         highlight_selected_layer(self.axial_controller.volume_layers, index)
         self.update_layer_controls()
 

@@ -5,28 +5,15 @@ from PySide6.QtWidgets import QSlider
 from utils.image_processing import process_layers
 from utils.layer_loader import load_dicom_layer
 
-
-def resample_volume_to_isotropic(volume, spacing, new_spacing=1.0):
-    import SimpleITK as sitk
-    sitk_image = sitk.GetImageFromArray(volume)
-    original_spacing = spacing  # tuple (sx, sy, sz)
-    original_size = sitk_image.GetSize()
-
-    new_size = [
-        int(round(original_size[0] * (original_spacing[0] / new_spacing))),
-        int(round(original_size[1] * (original_spacing[1] / new_spacing))),
-        int(round(original_size[2] * (original_spacing[2] / new_spacing))),
-    ]
-
-    resampler = sitk.ResampleImageFilter()
-    resampler.SetOutputSpacing((new_spacing, new_spacing, new_spacing))
-    resampler.SetSize(new_size)
-    resampler.SetInterpolator(sitk.sitkLinear)
-    resampled_image = resampler.Execute(sitk_image)
-    return sitk.GetArrayFromImage(resampled_image)
-
-
 class BaseViewerController:
+    """
+        Controls the logic and state for a single DICOM image viewer panel.
+
+        This class manages loading DICOM volumes, handling image layers, updating display
+        properties,
+        and synchronizing UI controls with the underlying data for a specific view type
+        (axial, coronal, or sagittal).
+        """
     def __init__(self, view, scene, view_type):
         self.view = view
         self.scene = scene
@@ -52,6 +39,19 @@ class BaseViewerController:
         self.slice_slider = slider
 
     def load_dicom_folder(self, folder):
+        """
+                Loads a DICOM volume from the specified folder and adds it as a new layer.
+
+                This method creates the layer, sets up its UI controls,
+                updates the internal state, and refreshes the display for the current view type.
+
+                Args:
+                    folder: Path to the folder containing the DICOM files.
+
+                Returns:
+                    tuple: (name, layer, slider_rows) if successful, otherwise None.
+                """
+        # Load the DICOM volume and create a new layer and its UI controls
         layer, name, slider_rows = load_dicom_layer(
             folder,
             self.slider_container,
@@ -60,20 +60,24 @@ class BaseViewerController:
             update_display_cb=self.update_display,
         )
 
+        #adding fail-safes
         if layer is None:
             return None
 
+        # Add the layer's UI container to the slider container if present
         if self.slider_container and hasattr(layer, 'ui_container'):
             self.slider_container.addWidget(layer.ui_container)
 
+        # Store slider rows and add the new layer to the internal list
         layer.slider_rows = slider_rows
         self.volume_layers.append(layer)
         self.selected_layer_index = len(self.volume_layers) - 1
 
+        #store the initial value of the slice slider
         if self.slice_slider:
             self.initial_slice_slider_value = self.slice_slider.value()
 
-
+        # Set the slice index to the middle of the volume for the current view type
         layer = self.volume_layers[self.selected_layer_index]
         depth = (
             layer.data.shape[0] if self.view_type == "axial" else
@@ -84,6 +88,7 @@ class BaseViewerController:
         if self.slice_slider:
             self.slice_slider.setValue(self.slice_index + self.global_slice_offset)
 
+        #update the global slice range
         self.update_global_slice_slider_range()
         self.update_display()
 
@@ -119,6 +124,15 @@ class BaseViewerController:
         self.update_display()
 
     def update_display(self):
+        """
+        Updates the display to show the current image slice for the selected layer and
+        view type.
+
+        This method clamps the slice index to valid bounds, processes the image layers
+        to generate the current slice,
+        normalizes the image for display, and updates the scene and view to show the
+        resulting pixmap.
+        """
         if not self.volume_layers:
             self.scene.clear()
             return
@@ -149,15 +163,11 @@ class BaseViewerController:
         pixmap_item = self.scene.addPixmap(pixmap)
         self.scene.setSceneRect(pixmap_item.boundingRect())
 
-        # if self.view_type == "sagittal":
-        #     # No padding, left-aligned
-        #     self.view.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        #     self.view.resetTransform()  # No fitInView scaling
-        # else:
             # Centered and scaled
         self.view.setAlignment(Qt.AlignCenter)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
+        # Print statements for debugging
         # print(f"{self.view_type.title()} pixmap size: {pixmap.width()}x{pixmap.height()}")
         # print(f"View viewport size: {self.view.viewport().size()}")
         # print(f"Scene rect: {self.scene.sceneRect()}")
