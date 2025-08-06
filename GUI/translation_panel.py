@@ -11,38 +11,46 @@ class TranslationControlPanel(QFrame):
     def __init__(self):
         super().__init__()
 
+        # Callback for when the offset changes
         self.offset_changed_callback = None
         self.zoom_changed_callback = None
 
+        # Set up the main vertical layout for the panel
         layout = QVBoxLayout(self)
 
         self.sliders = []
         self.labels = []
 
-        #TODO The Z axis does not work yet fix
+        # Create sliders and labels for x and y axis offsets
         for i, axis in enumerate(['x', 'y']):
             row = QHBoxLayout()
             label = QLabel(f"Axis {axis} Offset:")
             value_label = QLabel("0 px")
 
+            # Create and configure the slider for this axis
             slider = QSlider(Qt.Horizontal)
             slider.setRange(-100, 100)
             slider.setValue(0)
 
+            # Function to update the value label when the slider changes
             def make_value_updater(lbl):
                 return lambda v: lbl.setText(f"{v} px")
 
+            # Connect slider value changes to label updater and offset change handler
             slider.valueChanged.connect(make_value_updater(value_label))
             slider.valueChanged.connect(lambda v, idx=i: self.on_offset_change(idx, v))
 
+            # Add widgets to the row layout
             row.addWidget(label)
             row.addWidget(slider)
             row.addWidget(value_label)
 
+            # Add the row to the main layout and store references
             layout.addLayout(row)
             self.sliders.append(slider)
             self.labels.append(value_label)
 
+        # Set the frame style and border for the panel
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("border:1px solid gray; padding:4px; border-radius:5px;")
 
@@ -55,7 +63,7 @@ class TranslationControlPanel(QFrame):
             calls the registered offset_changed_callback with the new values.
 
             Args:
-                axis_index: The index of the axis that was changed (0 for x, 1 for y, 2 for z).
+                axis_index: The index of the axis that was changed (0 for x, 1 for y).
                 value: The new value of the changed slider.
         """
         if self.offset_changed_callback:
@@ -83,6 +91,12 @@ class TranslationControlPanel(QFrame):
             self.sliders[i].blockSignals(False)
 
     def reset_trans(self):
+        """
+                Resets all translation sliders and value labels to their default state.
+
+                This method sets each translation slider to zero and updates the
+                corresponding label to "0 px".
+                """
         for slider, label in zip(self.sliders, self.labels):
             slider.blockSignals(True)
             slider.setValue(0)
