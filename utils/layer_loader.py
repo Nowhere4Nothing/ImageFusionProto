@@ -71,11 +71,7 @@ def setup_slider_ui(slider, default_value, label_prefix, layer_name, update_call
 
     return row, slider, value_label
 
-def load_dicom_layer( folder,
-    container_layout,
-    update_opacity_cb,
-    update_offset_cb,
-    update_display_cb=None,):
+def load_dicom_layer( folder, container_layout, update_opacity_cb, update_offset_cb, update_display_cb=None,):
     """
         Loads a DICOM volume from the specified folder and creates a new image layer with
         UI controls.
@@ -176,12 +172,23 @@ def load_dicom_layer( folder,
     return layer, layer.name, [frame]
 
 def create_opacity_slider():
+    """
+        Creates and returns a horizontal QSlider for controlling layer opacity.
+        """
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setMinimum(0)
     slider.setMaximum(10)
     return slider
 
 def create_slice_offset_slider(volume):
+    """
+        Creates and returns a horizontal QSlider for controlling the slice offset of a
+        layer.
+
+        Args:
+            volume: The 3D NumPy array representing the image volume,
+            used to determine the number of slices.
+        """
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setMinimum(-volume.shape[0] + 1)
     slider.setMaximum(volume.shape[0] - 1)
@@ -211,6 +218,13 @@ def reset_opacity_and_offset(layer, opacity_slider, offset_slider, update_displa
         update_display_cb()
 
 def _reset_slider_value(arg0, arg1):
+    """
+        Resets a QSlider to the specified value without emitting signals.
+
+        Args:
+            arg0: The QSlider instance to reset.
+            arg1: The value to set for the slider.
+        """
     # Reset sliders (which will update UI labels due to connected signals)
     arg0.blockSignals(True)
     arg0.setValue(arg1)
@@ -220,21 +234,21 @@ def highlight_selected_layer(volume_layers, selected_index):
     """
         Highlights the UI container of the selected layer in the layer list.
 
-        This function updates the border style of each layer's UI container to visually
-        indicate which layer is currently selected.
-
         Args:
             volume_layers: List of layer objects, each potentially containing a UI container.
             selected_index: Index of the currently selected layer.
         """
     for i, layer in enumerate(volume_layers):
+        # Check if the layer has a UI container to highlight
         if hasattr(layer, 'ui_container') and layer.ui_container:
             if i == selected_index:
+                # Highlight the selected layer with a blue border
                 layer.ui_container.setStyleSheet(
                     #only a blue border as fill made the checkbox hard to see
                     "border: 2px solid #0078d7; padding: 4px; border-radius: 5px;"
                 )
             else:
+                # Use a gray border for unselected layers
                 layer.ui_container.setStyleSheet(
                     "border: 1px solid gray; padding: 4px; border-radius: 5px;"
                 )

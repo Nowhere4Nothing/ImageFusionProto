@@ -81,8 +81,6 @@ class DicomViewer(QMainWindow):
 
     def setup_ui(self):
         """
-             Sets up the user interface for the DICOM viewer main window.
-
              This method creates and arranges all UI components, including sliders,
              panels, and control buttons, and connects them to the viewer controller
              and the main window layout.
@@ -162,21 +160,23 @@ class DicomViewer(QMainWindow):
             Returns:
                 None
             """
+        # Open a dialog for the user to select a DICOM folder
         folder = QFileDialog.getExistingDirectory(self, "Select DICOM Folder")
         if not folder:
             return
 
-            # Load the layer once using axial controller (which manages sliders)
+        # Load the layer once using axial controller (which manages sliders)
         result = self.axial_controller.load_dicom_folder(folder)
         if result is None:
             return
 
         name, layer, slider_rows = result
 
-        # Load into coronal and sagittal controllers explicitly, and get results if you want
+        # Load the same DICOM folder into coronal and sagittal controllers for multi-view support
         self.coronal_controller.load_dicom_folder(folder)
         self.sagittal_controller.load_dicom_folder(folder)
 
+        # Select the newly added layer in all views and update the UI
         self._extracted_from_on_layer_selected_27(0)
         self.layer_list.addItem(name)
         self.layer_list.setCurrentRow(self.layer_list.count() - 1)
@@ -185,8 +185,6 @@ class DicomViewer(QMainWindow):
 
     def on_layer_selected(self, index):
         """
-              Handles the event when a new layer is selected in the layer list.
-
               Updates the selected layer in the viewer controller and refreshes the layer
               controls accordingly.
 
@@ -207,10 +205,12 @@ class DicomViewer(QMainWindow):
 
     def update_layer_controls(self):
         """
-                Updates the rotation and translation controls to match the currently selected layer.
+                Updates the rotation and translation controls to match the currently
+                selected layer.
 
-                If no layer is selected, resets the controls to default values. Otherwise, sets the controls
-                to reflect the rotation and offset of the selected image layer.
+                If no layer is selected, resets the controls to default values.
+                Otherwise, sets the controls to reflect the rotation and offset of the
+                selected image layer.
         """
         if self.axial_controller.selected_layer_index is None:
             self.rotation_panel.set_rotations([0, 0, 0])
@@ -221,6 +221,15 @@ class DicomViewer(QMainWindow):
             self.translation_panel.set_offsets(layer.offset)
 
     def on_rotation_changed(self, axis_index, value):
+        """
+                This method synchronizes the rotation for the specified axis across the
+                axial, coronal, and sagittal controllers.
+
+                Args:
+                    axis_index: The index of the rotation axis (0 for LR, 1 for PA,
+                    2 for IS).
+                    value: The new rotation value in degrees.
+                """
         for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
             controller.update_rotation(axis_index, value)
 
@@ -283,11 +292,23 @@ class DicomViewer(QMainWindow):
             controller.update_translation(offset)
 
     def reset_zoom(self):
+        """
+                This method resets the view's transformation, sets the internal zoom
+                state to 1.0, and updates the zoom panel UI.
+                """
         self.graphics_view.resetTransform()
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom(1.0)
 
     def on_global_slice_changed(self, value):
+        """
+                This method synchronizes the slice index across axial, coronal,
+                and sagittal views by adjusting for each controller's global offset and
+                refreshing their displays.
+
+                Args:
+                    value: The new value from the global slice slider.
+                """
         for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
             # Adjust slice index relative to each controller's global offset
             controller.slice_index = value - controller.global_slice_offset
@@ -295,8 +316,6 @@ class DicomViewer(QMainWindow):
 
     def on_zoom_changed(self, new_zoom):
         """
-            Updates the zoom level of the graphics view based on the provided zoom factor.
-
             This method resets the current transformation and applies the new zoom,
             updating the internal zoom state.
 
@@ -310,9 +329,6 @@ class DicomViewer(QMainWindow):
 
     def reset_layer_controls(self):
         """
-            Resets all controls and properties for the currently selected image
-            layer to their default values.
-
             This method restores the layer's rotation, translation, opacity,
             and slice offset, and updates the UI controls accordingly.
         """

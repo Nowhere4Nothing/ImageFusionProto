@@ -33,9 +33,17 @@ class BaseViewerController:
         self.initial_slice_slider_value = 0
 
     def set_slider_container(self, layout):
+        """
+               This method allows the viewer controller to store a reference to the layout where UI elements
+               (such as opacity and offset sliders) for each image layer will be added.
+               """
         self.slider_container = layout
 
     def set_slice_slider(self, slider: QSlider):
+        """
+                This method stores a reference to the provided slider, allowing the controller
+                to update and respond to slice changes.
+                """
         self.slice_slider = slider
 
     def load_dicom_folder(self, folder):
@@ -47,9 +55,6 @@ class BaseViewerController:
 
                 Args:
                     folder: Path to the folder containing the DICOM files.
-
-                Returns:
-                    tuple: (name, layer, slider_rows) if successful, otherwise None.
                 """
         # Load the DICOM volume and create a new layer and its UI controls
         layer, name, slider_rows = load_dicom_layer(
@@ -95,16 +100,30 @@ class BaseViewerController:
         return name, layer, slider_rows
 
     def update_opacity(self, layer, value):
+        """
+                This method is called when the opacity slider changes, setting the
+                layer's opacity property and updating the view.
+                """
         print(f"Opacity value raw: {value}")
         layer.opacity = value /100
         self.update_display()
 
     def update_slice_offset(self, layer, value):
+        """
+                This method is called when the slice offset slider changes,
+                updating the layer's slice offset,
+                recalculating the global slice slider range, and updating the view.
+                """
         layer.slice_offset = value
         self.update_global_slice_slider_range()
         self.update_display()
 
     def update_rotation(self, axis_index, value):
+        """
+                This method sets the rotation for the given axis, invalidates any
+                cached rotated volume, and starts a timer to trigger a delayed display
+                update.
+                """
         if self.selected_layer_index is None:
             return
         layer = self.volume_layers[self.selected_layer_index]
@@ -113,6 +132,10 @@ class BaseViewerController:
         self._update_timer.start(150)
 
     def update_translation(self, offset):
+        """
+                This method sets the offset property of the currently selected layer
+                to the provided value and updates the view.
+                """
         if self.selected_layer_index is None:
             return
         layer = self.volume_layers[self.selected_layer_index]
@@ -120,50 +143,60 @@ class BaseViewerController:
         self.update_display()
 
     def on_slice_change(self, value):
+        """
+                This method adjusts the internal slice index based on the global offset and
+                refreshes the display to show the new slice.
+                """
         self.slice_index = value - self.global_slice_offset
         self.update_display()
 
     def update_display(self):
         """
-        Updates the display to show the current image slice for the selected layer and
-        view type.
-
         This method clamps the slice index to valid bounds, processes the image layers
         to generate the current slice,
         normalizes the image for display, and updates the scene and view to show the
         resulting pixmap.
         """
+
+        # If there are no layers, clear the scene and exit
         if not self.volume_layers:
             self.scene.clear()
             return
 
+        # Get the currently selected layer
         layer = self.volume_layers[self.selected_layer_index]
+        # Determine the maximum valid slice index for the current view type
         max_slice = (
             layer.data.shape[0] if self.view_type == "axial" else
             layer.data.shape[1] if self.view_type == "coronal" else
             layer.data.shape[2]
         )
+        # Clamp the slice index to valid bounds
         clamped_index = np.clip(self.slice_index, 0, max_slice - 1)
 
+        # If the slice index was out of bounds, update it and print a debug message
         if self.slice_index != clamped_index:
             print(f"Clamping {self.view_type} index from {self.slice_index} to {clamped_index}")
             self.slice_index = clamped_index
 
+        # Process the image layers to generate the current 2D slice
         img = process_layers(self.volume_layers, self.slice_index, view_type=self.view_type)
 
         # Normalize to 0-255 for grayscale QImage
         img = (img - img.min()) / (img.max() - img.min() + 1e-8)
         img = (img * 255).astype(np.uint8)
 
+        # Convert the NumPy array to a QImage and then to a QPixmap
         height, width = img.shape
         qimage = QImage(img.data, width, height, width, QImage.Format.Format_Grayscale8)
         pixmap = QPixmap.fromImage(qimage)
 
+        # Clear the scene and add the new pixmap
         self.scene.clear()
         pixmap_item = self.scene.addPixmap(pixmap)
         self.scene.setSceneRect(pixmap_item.boundingRect())
 
-            # Centered and scaled
+        # Center and scale the view to fit the scene
         self.view.setAlignment(Qt.AlignCenter)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 
@@ -172,14 +205,25 @@ class BaseViewerController:
         # print(f"View viewport size: {self.view.viewport().size()}")
         # print(f"Scene rect: {self.scene.sceneRect()}")
 
-
     def update_global_slice_slider_range(self):
+        """
+                Updates the range and offset of the global slice slider based on all
+                loaded layers.
+
+                This method calculates the minimum and maximum valid slice indices
+                across all layers for the current view type,
+                sets the slider's minimum and maximum accordingly, and adjusts the
+                global slice offset so that the slider starts at zero.
+                It also ensures the current slider value is within the valid range and
+                updates the internal slice index.
+                """
         if not self.volume_layers or not self.slice_slider:
             return
 
         min_index = float('inf')
         max_index = float('-inf')
 
+        # Determine the minimum and maximum slice indices across all layers
         for layer in self.volume_layers:
             if self.view_type == "axial":
                 dim = layer.data.shape[0]
@@ -202,15 +246,23 @@ class BaseViewerController:
         slider_min = 0
         slider_max = max_index - min_index
 
+        # Set the slider's minimum and maximum values
         self.slice_slider.setMinimum(slider_min)
         self.slice_slider.setMaximum(slider_max)
 
+        # Ensure the current slider value is within the valid range
         if not (slider_min <= self.slice_slider.value() <= slider_max):
             self.slice_slider.setValue(slider_min)
 
+        # Update the internal slice index based on the slider value and global offset
         self.slice_index = self.slice_slider.value() - self.global_slice_offset
 
     def select_layer(self, index):
+        """
+                This method sets the selected layer index to the given value if it is
+                valid, or clears the selection otherwise, and refreshes the view.
+
+                """
         if 0 <= index < len(self.volume_layers):
             self.selected_layer_index = index
         else:
@@ -218,11 +270,24 @@ class BaseViewerController:
         self.update_display()
 
     def remove_current_layer(self):
+        """
+                This method deletes the selected layer from the internal list,
+                updates the selected layer index,
+                recalculates the global slice slider range, and refreshes
+                the display to reflect the change.
+                """
+
+        # Get the index of the currently selected layer
         index = self.selected_layer_index
+
+        # If no valid selection, do nothing
         if index is None or not (0 <= index < len(self.volume_layers)):
             return
 
+        # Remove the layer from the list
         self.volume_layers.pop(index)
+
+        # Update the selected layer index based on the new list length
         if len(self.volume_layers) == 0:
             self.selected_layer_index = None
         elif index >= len(self.volume_layers):
@@ -230,10 +295,15 @@ class BaseViewerController:
         else:
             self.selected_layer_index = index
 
+        # Update the global slice slider range and refresh the display
         self.update_global_slice_slider_range()
         self.update_display()
 
     def reset_zoom(self):
+        """
+                This method resets any transformations applied to the view,
+                restoring the original zoom and pan.
+                """
         self.scene.views()[0].resetTransform()
 
     def reset_global_slice_slider(self):

@@ -4,7 +4,16 @@ import pydicom
 
 
 def load_dicom_volume(folder):
+    """
+        This function reads all DICOM files in the specified folder, filters for CT
+        slices with required metadata, sorts them by slice position, stacks them into a 3D NumPy array, normalizes the
+        pixel values, and extracts voxel spacing information.
+
+        Args:
+            folder: Path to the folder containing DICOM files.
+        """
     slices = []
+    # Iterate through all files in the folder, sorted alphabetically
     for file in sorted(os.listdir(folder)):
         path = os.path.join(folder, file)
         try:
@@ -19,34 +28,45 @@ def load_dicom_volume(folder):
                 print(f"Skipping {file}: No image data")
                 continue
 
+            # Add valid DICOM slice to the list
             slices.append(ds)
         except Exception as e:
             print(f"Failed to read {path}: {e}")
             continue
 
+    # If no valid slices were found, return None
     if not slices:
         print("No valid DICOM slices.")
         return None, None
 
+    # Sort slices by their position along the z-axis (ImagePositionPatient[2])
     try:
         slices = sorted(slices, key=lambda s: float(s.ImagePositionPatient[2]))
     except AttributeError:
         print("Some slices are missing ImagePositionPatient metadata.")
         return None, None
 
-    # Stack images into volume
+    # Stack all pixel arrays into a 3D volume and normalize to [0, 1]
     volume = np.stack([s.pixel_array for s in slices]).astype(np.float32)
     volume -= volume.min()
     if volume.max() != 0:
         volume /= volume.max()
 
-    # === Extract voxel spacing (z, y, x) ===
-    ds0 = slices[0]
+    # Extract voxel spacing (z, y, x) from the first slice's metadata
+    pixel_spacings = [tuple(map(float, s.PixelSpacing)) for s in slices if hasattr(s, "PixelSpacing")]
+    slice_thicknesses = [float(s.SliceThickness) for s in slices if hasattr(s, "SliceThickness")]
+
+    if len(set(pixel_spacings)) > 1:
+        print("Warning: Inconsistent PixelSpacing across slices.")
+    if len(set(slice_thicknesses)) > 1:
+        print("Warning: Inconsistent SliceThickness across slices.")
+
+    # Use spacing from first slice as default
     try:
-        pixel_spacing = [float(x) for x in ds0.PixelSpacing]  # [row, col] -> (y, x)
-        slice_thickness = float(ds0.SliceThickness)  # z
-        spacing = (slice_thickness, pixel_spacing[0], pixel_spacing[1])  # (z, y, x)
-    except AttributeError:
+        yx_spacing = pixel_spacings[0]
+        z_spacing = slice_thicknesses[0]
+        spacing = (z_spacing, yx_spacing[0], yx_spacing[1])  # (z, y, x)
+    except IndexError:
         print("Missing spacing metadata. Using default spacing (1.0, 1.0, 1.0)")
         spacing = (1.0, 1.0, 1.0)
 
