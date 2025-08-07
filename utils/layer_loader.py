@@ -174,11 +174,6 @@ def load_dicom_layer( folder, container_layout, update_opacity_cb, update_offset
 def create_opacity_slider():
     """
         Creates and returns a horizontal QSlider for controlling layer opacity.
-
-        The slider is configured with a minimum value of 0 and a maximum value of 10.
-
-        Returns:
-            QSlider: The configured opacity slider.
         """
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setMinimum(0)
@@ -190,16 +185,9 @@ def create_slice_offset_slider(volume):
         Creates and returns a horizontal QSlider for controlling the slice offset of a
         layer.
 
-        The slider is configured with a minimum value of -(number of slices - 1)
-        and a maximum value of (number of slices - 1),allowing the user to shift the
-        displayed slice within the volume.
-
         Args:
             volume: The 3D NumPy array representing the image volume,
             used to determine the number of slices.
-
-        Returns:
-            QSlider: The configured slice offset slider.
         """
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setMinimum(-volume.shape[0] + 1)
@@ -233,9 +221,6 @@ def _reset_slider_value(arg0, arg1):
     """
         Resets a QSlider to the specified value without emitting signals.
 
-        This function temporarily blocks signals, sets the slider value, and
-        then re-enables signals to avoid triggering connected callbacks.
-
         Args:
             arg0: The QSlider instance to reset.
             arg1: The value to set for the slider.
@@ -248,9 +233,6 @@ def _reset_slider_value(arg0, arg1):
 def highlight_selected_layer(volume_layers, selected_index):
     """
         Highlights the UI container of the selected layer in the layer list.
-
-        This function updates the border style of each layer's UI container to visually
-        indicate which layer is currently selected.
 
         Args:
             volume_layers: List of layer objects, each potentially containing a UI container.

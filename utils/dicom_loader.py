@@ -5,19 +5,12 @@ import pydicom
 
 def load_dicom_volume(folder):
     """
-        Loads a DICOM volume from a folder containing DICOM files.
-
         This function reads all DICOM files in the specified folder, filters for CT
         slices with required metadata, sorts them by slice position, stacks them into a 3D NumPy array, normalizes the
         pixel values, and extracts voxel spacing information.
 
         Args:
             folder: Path to the folder containing DICOM files.
-
-        Returns:
-            tuple: (volume, spacing) where volume is a 3D NumPy array and spacing is a
-            tuple (z, y, x).
-                   Returns (None, None) if loading fails or no valid slices are found.
         """
     slices = []
     # Iterate through all files in the folder, sorted alphabetically

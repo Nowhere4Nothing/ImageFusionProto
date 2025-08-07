@@ -43,8 +43,6 @@ class ZoomControlPanel(QFrame):
 
     def on_slider_value_changed(self, value):
         """
-                Handles changes to the zoom slider and updates the zoom factor display.
-
                 This method updates the label to show the new zoom factor and calls the
                 registered callback with the new value.
 
@@ -59,8 +57,6 @@ class ZoomControlPanel(QFrame):
 
     def set_zoom_changed_callback(self, callback):
         """
-                Sets the callback function to be called when the zoom value changes.
-
                 This method allows external code to register a callback that will be invoked
                 with the new zoom factor when the slider is adjusted.
 
@@ -73,8 +69,6 @@ class ZoomControlPanel(QFrame):
 
     def set_zoom(self, zoom_factor):
         """
-                Sets the zoom slider and label to the specified zoom factor.
-
                 This method updates the slider and label to reflect the given zoom value
                 without emitting change signals.
 

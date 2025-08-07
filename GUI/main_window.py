@@ -81,8 +81,6 @@ class DicomViewer(QMainWindow):
 
     def setup_ui(self):
         """
-             Sets up the user interface for the DICOM viewer main window.
-
              This method creates and arranges all UI components, including sliders,
              panels, and control buttons, and connects them to the viewer controller
              and the main window layout.
@@ -187,8 +185,6 @@ class DicomViewer(QMainWindow):
 
     def on_layer_selected(self, index):
         """
-              Handles the event when a new layer is selected in the layer list.
-
               Updates the selected layer in the viewer controller and refreshes the layer
               controls accordingly.
 
@@ -226,9 +222,6 @@ class DicomViewer(QMainWindow):
 
     def on_rotation_changed(self, axis_index, value):
         """
-                Updates the rotation value for all view controllers when a rotation
-                slider is changed.
-
                 This method synchronizes the rotation for the specified axis across the
                 axial, coronal, and sagittal controllers.
 
@@ -300,8 +293,6 @@ class DicomViewer(QMainWindow):
 
     def reset_zoom(self):
         """
-                Resets the zoom level of the graphics view to its default state.
-
                 This method resets the view's transformation, sets the internal zoom
                 state to 1.0, and updates the zoom panel UI.
                 """
@@ -311,9 +302,6 @@ class DicomViewer(QMainWindow):
 
     def on_global_slice_changed(self, value):
         """
-                Updates the displayed slice index for all view controllers when the
-                global slice slider changes.
-
                 This method synchronizes the slice index across axial, coronal,
                 and sagittal views by adjusting for each controller's global offset and
                 refreshing their displays.
@@ -328,8 +316,6 @@ class DicomViewer(QMainWindow):
 
     def on_zoom_changed(self, new_zoom):
         """
-            Updates the zoom level of the graphics view based on the provided zoom factor.
-
             This method resets the current transformation and applies the new zoom,
             updating the internal zoom state.
 
@@ -343,9 +329,6 @@ class DicomViewer(QMainWindow):
 
     def reset_layer_controls(self):
         """
-            Resets all controls and properties for the currently selected image
-            layer to their default values.
-
             This method restores the layer's rotation, translation, opacity,
             and slice offset, and updates the UI controls accordingly.
         """

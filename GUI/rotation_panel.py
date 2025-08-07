@@ -52,9 +52,6 @@ class RotationControlPanel(QFrame):
 
     def on_rotation_change(self, axis_index, value):
         """
-               Handles changes to a rotation slider and emits the rotation changed
-                callback.
-
                This method is called when a rotation slider value changes and notifies
                any registered callback with the axis index and new value.
 
@@ -67,8 +64,6 @@ class RotationControlPanel(QFrame):
 
     def set_rotation_changed_callback(self, callback):
         """
-                Sets the callback function to be called when a rotation value changes.
-
                 This method allows external code to register a callback that will be
                 invoked with the axis index and new value when a rotation slider is
                 adjusted.
@@ -80,8 +75,6 @@ class RotationControlPanel(QFrame):
 
     def set_rotations(self, rotations):
         """
-                Sets the rotation values for all axes in the control panel.
-
                 This method updates each rotation slider to the specified value without
                 emitting signals.
 
@@ -97,8 +90,6 @@ class RotationControlPanel(QFrame):
 
     def reset_rotation(self):
         """
-                Resets all rotation sliders and value labels to their default state.
-
                 This method sets each rotation slider to zero and updates the
                 corresponding label to "0°".
                 """

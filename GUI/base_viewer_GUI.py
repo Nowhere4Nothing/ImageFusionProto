@@ -43,23 +43,14 @@ class BaseViewer(QWidget):
                Loads a DICOM volume from the specified folder and adds it as a new
                layer to the viewer.
 
-               This method delegates the loading operation to the associated controller
-               and returns the result.
-
                Args:
-                   folder: Path to the folder containing the DICOM files.
-
-               Returns:
-                   The result of the controller's load_dicom_folder method,
-                   typically a tuple with layer information.
+                   folder: Path to the folder containing the DICOM files..
                """
         return self.controller.load_dicom_folder(folder)
 
     def select_layer(self, index):
         """
                 Selects the image layer at the specified index in the viewer.
-
-                This method delegates the selection operation to the associated controller.
 
                 Args:
                     index: The index of the layer to select.
@@ -70,8 +61,6 @@ class BaseViewer(QWidget):
         """
                 Updates the rotation value for the specified axis of the current image
                 layer.
-
-                This method delegates the rotation update to the associated controller.
 
                 Args:
                     axis: The index of the rotation axis (e.g., 0 for LR, 1 for PA,

@@ -57,8 +57,6 @@ class TranslationControlPanel(QFrame):
 
     def on_offset_change(self, axis_index, value):
         """
-            Handles changes to the translation offset sliders and notifies the callback.
-
             When a slider value changes, this method collects the current x and y offsets and
             calls the registered offset_changed_callback with the new values.
 
@@ -74,9 +72,6 @@ class TranslationControlPanel(QFrame):
 
     def set_offset_changed_callback(self, callback):
         """
-                Sets the callback function to be called when the translation offset
-                changes.
-
                 This method allows external code to register a callback that will be
                 invoked with the new (x, y) offset when a slider is adjusted.
 
@@ -88,8 +83,6 @@ class TranslationControlPanel(QFrame):
 
     def set_offsets(self, offsets):
         """
-            Sets the x and y offset slider values to the provided offsets.
-
             This method updates the slider positions for the x and y axes without
             emitting value changed signals.
 
@@ -103,8 +96,6 @@ class TranslationControlPanel(QFrame):
 
     def reset_trans(self):
         """
-                Resets all translation sliders and value labels to their default state.
-
                 This method sets each translation slider to zero and updates the
                 corresponding label to "0 px".
                 """

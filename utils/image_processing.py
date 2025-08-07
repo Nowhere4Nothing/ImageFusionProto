@@ -4,8 +4,6 @@ import SimpleITK as sitk
 
 def resize_to_match(base, target_shape):
     """
-       Resizes a 2D image array to match the specified target shape.
-
        This function uses OpenCV to resize the input image to the given (height, width),
         ensuring compatibility for blending or display.
 
@@ -20,7 +18,6 @@ def resize_to_match(base, target_shape):
 
 def sitk_rotate_volume(volume, rotation_angles_deg):
     """
-       Rotates a 3D image volume by the specified angles using SimpleITK.
 
        This function applies a 3D Euler rotation to the input volume around its physical
        center and returns the rotated volume as a NumPy array.

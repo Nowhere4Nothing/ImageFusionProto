@@ -34,8 +34,6 @@ class BaseViewerController:
 
     def set_slider_container(self, layout):
         """
-               Sets the layout to be used as the container for layer-specific sliders and controls.
-
                This method allows the viewer controller to store a reference to the layout where UI elements
                (such as opacity and offset sliders) for each image layer will be added.
 
@@ -46,8 +44,6 @@ class BaseViewerController:
 
     def set_slice_slider(self, slider: QSlider):
         """
-                Sets the QSlider to be used for navigating image slices in the viewer.
-
                 This method stores a reference to the provided slider, allowing the controller
                 to update and respond to slice changes.
 
@@ -65,9 +61,6 @@ class BaseViewerController:
 
                 Args:
                     folder: Path to the folder containing the DICOM files.
-
-                Returns:
-                    tuple: (name, layer, slider_rows) if successful, otherwise None.
                 """
         # Load the DICOM volume and create a new layer and its UI controls
         layer, name, slider_rows = load_dicom_layer(
@@ -114,9 +107,6 @@ class BaseViewerController:
 
     def update_opacity(self, layer, value):
         """
-                Updates the opacity of the specified image layer and refreshes the
-                display.
-
                 This method is called when the opacity slider changes, setting the
                 layer's opacity property and updating the view.
 
@@ -130,9 +120,6 @@ class BaseViewerController:
 
     def update_slice_offset(self, layer, value):
         """
-                Updates the slice offset of the specified image layer and refreshes
-                the display.
-
                 This method is called when the slice offset slider changes,
                 updating the layer's slice offset,
                 recalculating the global slice slider range, and updating the view.
@@ -147,9 +134,6 @@ class BaseViewerController:
 
     def update_rotation(self, axis_index, value):
         """
-                Updates the rotation value for the specified axis of the selected
-                image layer.
-
                 This method sets the rotation for the given axis, invalidates any
                 cached rotated volume, and starts a timer to trigger a delayed display
                 update.
@@ -168,9 +152,6 @@ class BaseViewerController:
 
     def update_translation(self, offset):
         """
-                Updates the translation (offset) of the selected image layer and
-                refreshes the display.
-
                 This method sets the offset property of the currently selected layer
                 to the provided value and updates the view.
 
@@ -186,8 +167,6 @@ class BaseViewerController:
 
     def on_slice_change(self, value):
         """
-                Handles changes to the slice slider and updates the displayed image slice.
-
                 This method adjusts the internal slice index based on the global offset and
                 refreshes the display to show the new slice.
 
@@ -199,9 +178,6 @@ class BaseViewerController:
 
     def update_display(self):
         """
-        Updates the display to show the current image slice for the selected layer and
-        view type.
-
         This method clamps the slice index to valid bounds, processes the image layers
         to generate the current slice,
         normalizes the image for display, and updates the scene and view to show the
@@ -266,9 +242,6 @@ class BaseViewerController:
                 global slice offset so that the slider starts at zero.
                 It also ensures the current slider value is within the valid range and
                 updates the internal slice index.
-
-                Returns:
-                    None
                 """
         if not self.volume_layers or not self.slice_slider:
             return
