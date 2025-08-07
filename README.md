@@ -1,6 +1,48 @@
 # ImageFusionProto
 Making the protype for the image fusion for assessment 4
 
+# Instructions for running
+#   Windows
+1. With a powershell window open on this folder with admin access, run
+```
+poetry --version # to ensure poetry is installed
+python -m venv .venv 
+.venv/Scripts/activate
+```
+This will then access a virtual environment to gather the dependencies required. It should now say **(.venv) PS C:/...**
+
+2. Now to install the dependencies run:
+```
+poetry install
+```
+All the dependencies will now install in the venv.
+
+3. Once all dependencies are installed, run:
+```
+python main.py
+```
+
+#   Unix
+1. With a terminal window open on this folder with sudo access, run
+```
+poetry --version # to ensure poetry is installed
+python3 -m venv .venv 
+source .venv/bin/activate
+```
+This will then access a virtual environment to gather the dependencies required. It should now say **(imagefusionproto-py3.1x)...**
+
+2. Now to install the dependencies run:
+```
+poetry install
+```
+All the dependencies will now install in the venv.
+
+3. Once all dependencies are installed, run:
+```
+python3 main.py
+```
+
+# OUO
 # To Do:
 1. Optimise the rotation [MATT]
 2. Add colour fusion (purple/green) (simple toggle button) [WILL]
