@@ -139,6 +139,13 @@ def process_layers(volume_layers, slice_index, view_type):
 
         # Resize overlay if its shape does not match the output image
         if img.shape != overlay.shape:
+            if is_label_mask := (
+                np.issubdtype(overlay.dtype, np.integer)
+                or np.issubdtype(overlay.dtype, np.bool_)
+                or (np.unique(overlay).size < 20)
+            ):
+                print(
+                    "Warning: Resizing a label/mask overlay. Using nearest-neighbor interpolation to avoid artifacts.")
             overlay = resize_to_match(overlay, img.shape)
             print(f"Resized overlay from {overlay.shape} to {img.shape}")
 

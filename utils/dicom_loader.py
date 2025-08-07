@@ -53,12 +53,20 @@ def load_dicom_volume(folder):
         volume /= volume.max()
 
     # Extract voxel spacing (z, y, x) from the first slice's metadata
-    ds0 = slices[0]
+    pixel_spacings = [tuple(map(float, s.PixelSpacing)) for s in slices if hasattr(s, "PixelSpacing")]
+    slice_thicknesses = [float(s.SliceThickness) for s in slices if hasattr(s, "SliceThickness")]
+
+    if len(set(pixel_spacings)) > 1:
+        print("Warning: Inconsistent PixelSpacing across slices.")
+    if len(set(slice_thicknesses)) > 1:
+        print("Warning: Inconsistent SliceThickness across slices.")
+
+    # Use spacing from first slice as default
     try:
-        pixel_spacing = [float(x) for x in ds0.PixelSpacing]  # [row, col] -> (y, x)
-        slice_thickness = float(ds0.SliceThickness)  # z
-        spacing = (slice_thickness, pixel_spacing[0], pixel_spacing[1])  # (z, y, x)
-    except AttributeError:
+        yx_spacing = pixel_spacings[0]
+        z_spacing = slice_thicknesses[0]
+        spacing = (z_spacing, yx_spacing[0], yx_spacing[1])  # (z, y, x)
+    except IndexError:
         print("Missing spacing metadata. Using default spacing (1.0, 1.0, 1.0)")
         spacing = (1.0, 1.0, 1.0)
 

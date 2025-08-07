@@ -36,9 +36,6 @@ class BaseViewerController:
         """
                This method allows the viewer controller to store a reference to the layout where UI elements
                (such as opacity and offset sliders) for each image layer will be added.
-
-               Args:
-                   layout: The QLayout instance to use as the slider container.
                """
         self.slider_container = layout
 
@@ -46,9 +43,6 @@ class BaseViewerController:
         """
                 This method stores a reference to the provided slider, allowing the controller
                 to update and respond to slice changes.
-
-                Args:
-                    slider: The QSlider instance to use for slice navigation.
                 """
         self.slice_slider = slider
 
@@ -109,10 +103,6 @@ class BaseViewerController:
         """
                 This method is called when the opacity slider changes, setting the
                 layer's opacity property and updating the view.
-
-                Args:
-                    layer: The image layer whose opacity is being changed.
-                    value: The new opacity value from the slider (typically 0-100).
                 """
         print(f"Opacity value raw: {value}")
         layer.opacity = value /100
@@ -123,10 +113,6 @@ class BaseViewerController:
                 This method is called when the slice offset slider changes,
                 updating the layer's slice offset,
                 recalculating the global slice slider range, and updating the view.
-
-                Args:
-                    layer: The image layer whose slice offset is being changed.
-                    value: The new slice offset value from the slider.
                 """
         layer.slice_offset = value
         self.update_global_slice_slider_range()
@@ -137,11 +123,6 @@ class BaseViewerController:
                 This method sets the rotation for the given axis, invalidates any
                 cached rotated volume, and starts a timer to trigger a delayed display
                 update.
-
-                Args:
-                    axis_index: The index of the rotation axis
-                    (0 for LR, 1 for PA, 2 for IS).
-                    value: The new rotation value in degrees.
                 """
         if self.selected_layer_index is None:
             return
@@ -154,10 +135,6 @@ class BaseViewerController:
         """
                 This method sets the offset property of the currently selected layer
                 to the provided value and updates the view.
-
-                Args:
-                    offset: A tuple or list representing the new (x, y) translation
-                    values.
                 """
         if self.selected_layer_index is None:
             return
@@ -169,9 +146,6 @@ class BaseViewerController:
         """
                 This method adjusts the internal slice index based on the global offset and
                 refreshes the display to show the new slice.
-
-                Args:
-                    value: The new value from the slice slider.
                 """
         self.slice_index = value - self.global_slice_offset
         self.update_display()
@@ -285,13 +259,9 @@ class BaseViewerController:
 
     def select_layer(self, index):
         """
-                Selects the image layer at the specified index and updates the display.
-
                 This method sets the selected layer index to the given value if it is
                 valid, or clears the selection otherwise, and refreshes the view.
 
-                Args:
-                    index: The index of the layer to select.
                 """
         if 0 <= index < len(self.volume_layers):
             self.selected_layer_index = index
@@ -301,9 +271,6 @@ class BaseViewerController:
 
     def remove_current_layer(self):
         """
-                Removes the currently selected image layer from the viewer and
-                updates the display.
-
                 This method deletes the selected layer from the internal list,
                 updates the selected layer index,
                 recalculates the global slice slider range, and refreshes
@@ -334,8 +301,6 @@ class BaseViewerController:
 
     def reset_zoom(self):
         """
-                Resets the zoom level of the view to its default state.
-
                 This method resets any transformations applied to the view,
                 restoring the original zoom and pan.
                 """

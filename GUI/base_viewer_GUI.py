@@ -42,18 +42,12 @@ class BaseViewer(QWidget):
         """
                Loads a DICOM volume from the specified folder and adds it as a new
                layer to the viewer.
-
-               Args:
-                   folder: Path to the folder containing the DICOM files..
                """
         return self.controller.load_dicom_folder(folder)
 
     def select_layer(self, index):
         """
                 Selects the image layer at the specified index in the viewer.
-
-                Args:
-                    index: The index of the layer to select.
                 """
         self.controller.select_layer(index)
 
@@ -61,37 +55,23 @@ class BaseViewer(QWidget):
         """
                 Updates the rotation value for the specified axis of the current image
                 layer.
-
-                Args:
-                    axis: The index of the rotation axis (e.g., 0 for LR, 1 for PA,
-                    2 for IS).
-                    value: The new rotation value in degrees.
                 """
         self.controller.update_rotation(axis, value)
 
     def update_translation(self, offset):
         """
-                Updates the translation (offset) of the current image layer in the viewer.
-
                 This method delegates the translation update to the associated controller.
-
-                Args:
-                    offset: A tuple or list representing the new (x, y) translation values.
                 """
         self.controller.update_translation(offset)
 
     def remove_current_layer(self):
         """
-                Removes the currently selected image layer from the viewer.
-
                 This method delegates the removal operation to the associated controller.
                 """
         self.controller.remove_current_layer()
 
     def reset_view(self):
         """
-                Resets the view to its default zoom and transformation state.
-
                 This method resets the QGraphicsView transformation and calls the
                 controller's reset_zoom method.
                 """
