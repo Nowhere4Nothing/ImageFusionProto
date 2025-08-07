@@ -73,6 +73,17 @@ class TranslationControlPanel(QFrame):
             self.offset_changed_callback((x, y))
 
     def set_offset_changed_callback(self, callback):
+        """
+                Sets the callback function to be called when the translation offset
+                changes.
+
+                This method allows external code to register a callback that will be
+                invoked with the new (x, y) offset when a slider is adjusted.
+
+                Args:
+                    callback: A function that takes a tuple or list representing
+                    the new (x, y) offset.
+                """
         self.offset_changed_callback = callback
 
     def set_offsets(self, offsets):

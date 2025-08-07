@@ -1,16 +1,11 @@
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QSlider
-
-from utils.image_processing import process_layers
-from utils.layer_loader import load_dicom_layer
-
 from Controller.base_view_controller import BaseViewerController
 
 
 class ViewerControllerCoronal(BaseViewerController):
     """
-    Controller for managing coronal DICOM view logic.
-    """
+        Controller for managing the logic and state of the Coronal DICOM image viewer.
+
+        Inherits from BaseViewerController and initializes the controller for the Coronal view type.
+        """
     def __init__(self, scene, view):
         super().__init__(view, scene, view_type="coronal")

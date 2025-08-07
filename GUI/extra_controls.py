@@ -42,6 +42,15 @@ class ZoomControlPanel(QFrame):
         self.setStyleSheet("border:1px solid gray; padding:4px; border-radius:5px;")
 
     def on_slider_value_changed(self, value):
+        """
+                Handles changes to the zoom slider and updates the zoom factor display.
+
+                This method updates the label to show the new zoom factor and calls the
+                registered callback with the new value.
+
+                Args:
+                    value: The new value of the zoom slider.
+                """
         # Update the label and emit the callback when the slider value changes
         zoom_factor = value / 100.0
         self.value_label.setText(f"{zoom_factor:.1f}×")
@@ -49,10 +58,29 @@ class ZoomControlPanel(QFrame):
             self.zoom_changed_callback(zoom_factor)
 
     def set_zoom_changed_callback(self, callback):
+        """
+                Sets the callback function to be called when the zoom value changes.
+
+                This method allows external code to register a callback that will be invoked
+                with the new zoom factor when the slider is adjusted.
+
+                Args:
+                    callback: A function that takes a single float argument representing
+                    the new zoom factor.
+                """
         # Set the callback function to be called when the zoom value changes
         self.zoom_changed_callback = callback
 
     def set_zoom(self, zoom_factor):
+        """
+                Sets the zoom slider and label to the specified zoom factor.
+
+                This method updates the slider and label to reflect the given zoom value
+                without emitting change signals.
+
+                Args:
+                    zoom_factor: The new zoom factor to set (e.g., 1.0 for 100%).
+                """
         # Temporarily block signals to avoid triggering callbacks while updating the slider
         self.zoom_slider.blockSignals(True)
         # Set the slider value based on the zoom factor (e.g., 1.0x -> 100)

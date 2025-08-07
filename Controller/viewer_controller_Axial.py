@@ -1,19 +1,11 @@
-from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QSlider
-
-from utils.image_processing import process_layers
-from utils.layer_loader import load_dicom_layer
-
 from Controller.base_view_controller import BaseViewerController
 
 
 class ViewerControllerAxial(BaseViewerController):
     """
-        Manages the logic and state for the DICOM image viewer.
+        Controller for managing the logic and state of the axial DICOM image viewer.
 
-        This class handles loading DICOM volumes, managing image layers, updating display properties,
-        and synchronizing UI controls with the underlying data.
+        Inherits from BaseViewerController and initializes the controller for the axial view type.
         """
     def __init__(self, scene, view):
         super().__init__(view, scene, view_type="axial")
