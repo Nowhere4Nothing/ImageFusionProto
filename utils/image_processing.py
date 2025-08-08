@@ -76,18 +76,10 @@ def process_layers(volume_layers, slice_index, view_type):
     if not volume_layers:
         return np.zeros((512, 512), dtype=np.uint8)
 
-    print("ViewType:", view_type)
     base_vol = volume_layers[0].data
 
-    # Determine base_shape to match the actual extracted slice for each view
-    if view_type == "axial":
-        base_shape = (base_vol.shape[1], base_vol.shape[2])
-    elif view_type == "coronal":
-        base_shape = (base_vol.shape[1], base_vol.shape[0])
-    elif view_type == "sagittal":
-        base_shape = (base_vol.shape[2], base_vol.shape[0])
-    else:
-        raise ValueError(f"Unknown view type: {view_type}")
+    # Always use (height, width) for display (Y, X) = (base_vol.shape[1], base_vol.shape[2])
+    base_shape = (base_vol.shape[1], base_vol.shape[2])  # (Y, X) for all views
 
     # Initialize the output image as a float32 array for blending
     img = np.zeros(base_shape, dtype=np.float32)
@@ -101,28 +93,26 @@ def process_layers(volume_layers, slice_index, view_type):
         # Copy the layer's volume data
         volume = layer.data.copy()
 
-        # print(f"Volume shape: {volume.shape}")
-
         # Apply 3D rotation with SimpleITK if rotation present
         if any(r != 0 for r in getattr(layer, 'rotation', [0, 0, 0])):
             volume = sitk_rotate_volume(volume, layer.rotation)
 
-        # Extract the appropriate 2D slice for the current view type
         if view_type == "axial":
             max_slice_index = volume.shape[0] - 1
             slice_index = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[slice_index, :, :]
+            overlay = volume[slice_index, :, :]  # (Y, X)
         elif view_type == "coronal":
             max_slice_index = volume.shape[1] - 1
             slice_index = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[:, slice_index, :].T
+            overlay = volume[:, slice_index, :]  # (Z, X)
+            # Resize to (Y, X) for display
+            overlay = resize_to_match(overlay, base_shape)
         elif view_type == "sagittal":
             max_slice_index = volume.shape[2] - 1
             slice_index = np.clip(slice_index, 0, max_slice_index)
-            overlay = volume[:, :, slice_index].T
-            overlay = np.rot90(overlay, k=2)
-
-        # print(f"Overlay shape before padding: {overlay.shape}")
+            overlay = volume[:, :, slice_index]  # (Z, Y)
+            # Resize to (Y, X) for display
+            overlay = resize_to_match(overlay, base_shape)
 
         # Convert overlay to float32 and normalize if needed
         overlay = overlay.astype(np.float32)
@@ -135,25 +125,9 @@ def process_layers(volume_layers, slice_index, view_type):
 
         # Blend the overlay into the output image using the layer's opacity
         opacity = np.clip(getattr(layer, 'opacity', 1.0), 0.0, 1.0)
-        print(f"Layer: {layer.name}, opacity: {opacity}, overlay max: {overlay.max():.3f}, min: {overlay.min():.3f}")
-
-        # Resize overlay if its shape does not match the output image
-        if img.shape != overlay.shape:
-            if is_label_mask := (
-                np.issubdtype(overlay.dtype, np.integer)
-                or np.issubdtype(overlay.dtype, np.bool_)
-                or (np.unique(overlay).size < 20)
-            ):
-                print(
-                    "Warning: Resizing a label/mask overlay. Using nearest-neighbor interpolation to avoid artifacts.")
-            overlay = resize_to_match(overlay, img.shape)
-            print(f"Resized overlay from {overlay.shape} to {img.shape}")
 
         # Perform alpha blending
         img = img * (1 - opacity) + overlay * opacity
-
-    # print(f"View: {view_type}, overlay shape: {overlay.shape}")
-    # print(f"img shape: {img.shape}, expected {base_shape[0]}x{base_shape[1]}")
 
     # Convert the final image to 8-bit unsigned integer format for display
     return (np.clip(img, 0, 1) * 255).astype(np.uint8)
@@ -175,8 +149,6 @@ def translate_image(img, x_offset, y_offset):
     if src_x_end > src_x_start and src_y_end > src_y_start:
         result[dst_y_start:dst_y_end, dst_x_start:dst_x_end] = img[src_y_start:src_y_end,
                                                                src_x_start:src_x_end]
-
-    print(f"Applying offset: x={x_offset}, y={y_offset}")
 
     return result
 

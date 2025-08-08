@@ -20,12 +20,12 @@ class BaseViewer(QWidget):
         self.view.setBackgroundBrush(QBrush(QColor(0, 0, 0)))
         self.view.setRenderHints(QPainter.Antialiasing | QPainter.SmoothPixmapTransform)
 
-        # Create and configure the slice slider (hidden by default)
+        # Create and configure the slice slider
         self.slice_slider = QSlider(Qt.Horizontal)
         self.slice_slider.setMinimum(0)
         self.slice_slider.setMaximum(100)
         self.slice_slider.setValue(50)
-        self.slice_slider.hide()
+        self.slice_slider.show()
 
         # Set up the layout with a label, the view, and the slider
         layout = QVBoxLayout()
@@ -34,9 +34,10 @@ class BaseViewer(QWidget):
         layout.addWidget(self.slice_slider)
         self.setLayout(layout)
 
-        # Initialize the controller for managing view logic
+         # Initialize the controller for managing view logic
         self.controller = controller_cls(self.scene, self.view)
         self.controller.set_slice_slider(self.slice_slider)
+        self.slice_slider.valueChanged.connect(self.controller.on_slice_change)
 
     def load_dicom_folder(self, folder):
         """
