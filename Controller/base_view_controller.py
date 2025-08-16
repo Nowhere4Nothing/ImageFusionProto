@@ -46,20 +46,22 @@ class BaseViewerController:
                 """
         self.slice_slider = slider
 
-    def load_dicom_folder(self, folder):
+    def load_dicom_folder(self, folder, add_controls=True):
         """
                 Loads a DICOM volume from the specified folder and adds it as a new layer.
 
-                This method creates the layer, sets up its UI controls,
+                This method creates the layer, sets up its UI controls (if add_controls is True),
                 updates the internal state, and refreshes the display for the current view type.
 
                 Args:
                     folder: Path to the folder containing the DICOM files.
+                    add_controls: If True, add UI controls for this layer (only True for axial view).
                 """
-        # Load the DICOM volume and create a new layer and its UI controls
+        # Only add controls for the main (axial) view
+        slider_container = self.slider_container if add_controls else None
         layer, name, slider_rows = load_dicom_layer(
             folder,
-            self.slider_container,
+            slider_container,
             self.update_opacity,
             self.update_slice_offset,
             update_display_cb=self.update_display,
@@ -104,7 +106,6 @@ class BaseViewerController:
                 This method is called when the opacity slider changes, setting the
                 layer's opacity property and updating the view.
                 """
-        print(f"Opacity value raw: {value}")
         layer.opacity = value /100
         self.update_display()
 
@@ -176,7 +177,6 @@ class BaseViewerController:
 
         # If the slice index was out of bounds, update it and print a debug message
         if self.slice_index != clamped_index:
-            print(f"Clamping {self.view_type} index from {self.slice_index} to {clamped_index}")
             self.slice_index = clamped_index
 
         # Process the image layers to generate the current 2D slice
@@ -193,10 +193,29 @@ class BaseViewerController:
 
         # Clear the scene and add the new pixmap
         self.scene.clear()
-        pixmap_item = self.scene.addPixmap(pixmap)
-        self.scene.setSceneRect(pixmap_item.boundingRect())
 
-        # Center and scale the view to fit the scene
+        # Get pixel spacing for the current view
+        spacing = getattr(layer, "spacing", (1.0, 1.0, 1.0))
+        if self.view_type == "axial":
+            pixel_height, pixel_width = spacing[1], spacing[2]
+        elif self.view_type == "coronal":
+            pixel_height, pixel_width = spacing[0], spacing[2]
+        elif self.view_type == "sagittal":
+            pixel_height, pixel_width = spacing[0], spacing[1]
+        else:
+            pixel_height, pixel_width = 1.0, 1.0
+
+        # Set the scene rect using physical size
+        scene_width = width * pixel_width
+        scene_height = height * pixel_height
+        self.scene.setSceneRect(0, 0, scene_width, scene_height)
+
+        # Center the pixmap in the scene
+        pixmap_x = (scene_width - width) / 2
+        pixmap_y = (scene_height - height) / 2
+        self.scene.addPixmap(pixmap).setPos(pixmap_x, pixmap_y)
+
+        # Center and scale the view to fit the scene, preserving physical aspect ratio
         self.view.setAlignment(Qt.AlignCenter)
         self.view.fitInView(self.scene.sceneRect(), Qt.KeepAspectRatio)
 

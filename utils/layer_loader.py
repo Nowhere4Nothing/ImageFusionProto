@@ -177,7 +177,8 @@ def create_opacity_slider():
         """
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setMinimum(0)
-    slider.setMaximum(10)
+    slider.setMaximum(100)
+    slider.setValue(50)
     return slider
 
 def create_slice_offset_slider(volume):

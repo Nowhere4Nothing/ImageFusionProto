@@ -42,6 +42,16 @@ All the dependencies will now install in the venv.
 python3 main.py
 ```
 
+# Usage Instructions
+To dislay the data
+1. Click the load DICOM Folder button
+2. Navigate to the data folder
+3. Press the Select the folder button on the data just before the data. Note: If you click in till it says "No items match your search" go back up one directory and select that folder.
+4. Data should be loaded
+5. To select a second layer follow the above steps again
+6. Once you have two layers, select the overlay and make as transparent as needed via the opacity slider
+7. Use the translate / rotate buttons to align images
+
 # OUO
 ## To Do:
 1. Optimise the rotation [MATT]

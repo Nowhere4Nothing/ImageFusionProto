@@ -73,9 +73,20 @@ class DicomViewer(QMainWindow):
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom_changed_callback(self.on_zoom_changed)
 
-        self.rt_dose_layer = None
+        # Static sliders for opacity and slice offset
+        self.opacity_slider = QSlider(Qt.Horizontal)
+        self.opacity_slider.setMinimum(0)
+        self.opacity_slider.setMaximum(100)
+        self.opacity_slider.setValue(100)
+        self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
 
-        self.slice_slider = None
+        self.slice_offset_slider = QSlider(Qt.Horizontal)
+        self.slice_offset_slider.setMinimum(-100)
+        self.slice_offset_slider.setMaximum(100)
+        self.slice_offset_slider.setValue(0)
+        self.slice_offset_slider.valueChanged.connect(self.on_slice_offset_changed)
+
+        self.rt_dose_layer = None
 
         self.setup_ui()
 
@@ -85,21 +96,12 @@ class DicomViewer(QMainWindow):
              panels, and control buttons, and connects them to the viewer controller
              and the main window layout.
         """
-        self.slice_slider = QSlider(Qt.Horizontal)
-        self.slice_slider.setMinimum(0)
-        self.slice_slider.setMaximum(100)
-        self.slice_slider.setValue(50)
-
-        # Connect all slice slider to controller
-        self.axial_controller.set_slice_slider(self.slice_slider)
-        self.coronal_controller.set_slice_slider(self.slice_slider)
-        self.sagittal_controller.set_slice_slider(self.slice_slider)
-
-        self.slice_slider.valueChanged.connect(self.on_global_slice_changed)
 
         # Create slider container for opacity and offset sliders
         self.slider_container = QVBoxLayout()
         self.axial_controller.set_slider_container(self.slider_container)
+        self.coronal_controller.set_slider_container(self.slider_container)
+        self.sagittal_controller.set_slider_container(self.slider_container)
 
         # Compose controls layout
         controls = QVBoxLayout()
@@ -109,10 +111,15 @@ class DicomViewer(QMainWindow):
         controls.addWidget(self.layer_list)
         controls.addWidget(self.reset_sliders_button)
 
+        # Static sliders for opacity and slice offset
+        controls.addWidget(QLabel("Layer Opacity"))
+        controls.addWidget(self.opacity_slider)
+        controls.addWidget(QLabel("Layer Slice Offset"))
+        controls.addWidget(self.slice_offset_slider)
+
         #Rotation sliders
         controls.addWidget(QLabel("Rotation Controls"))
         controls.addWidget(self.rotation_panel)
-        controls.addLayout(self.slider_container)
 
         #translation sliders
         controls.addWidget(QLabel("Translation Controls"))
@@ -121,10 +128,6 @@ class DicomViewer(QMainWindow):
         #Zoom in extra container
         controls.addWidget(QLabel("Zoom"))
         controls.addWidget(self.zoom_panel)
-
-        #global slice slider
-        controls.addWidget(QLabel("Global Slice"))
-        controls.addWidget(self.slice_slider)
 
         # Compose main layout
         viewer_layout = QVBoxLayout()
@@ -165,16 +168,21 @@ class DicomViewer(QMainWindow):
         if not folder:
             return
 
-        # Load the layer once using axial controller (which manages sliders)
-        result = self.axial_controller.load_dicom_folder(folder)
-        if result is None:
+        # Load the DICOM data once
+        result_axial = self.axial_controller.load_dicom_folder(folder)
+        if result_axial is None:
             return
+        name, layer_axial, slider_rows = result_axial
 
-        name, layer, slider_rows = result
+        # Load the same DICOM data into coronal and sagittal controllers (no controls)
+        result_coronal = self.coronal_controller.load_dicom_folder(folder, add_controls=False)
+        result_sagittal = self.sagittal_controller.load_dicom_folder(folder, add_controls=False)
 
-        # Load the same DICOM folder into coronal and sagittal controllers for multi-view support
-        self.coronal_controller.load_dicom_folder(folder)
-        self.sagittal_controller.load_dicom_folder(folder)
+        # Reset zoom to 1.0 for all viewers
+        for viewer in [self.multi_view.axial_viewer, self.multi_view.coronal_viewer, self.multi_view.sagittal_viewer]:
+            viewer.view.resetTransform()
+        self.current_zoom = 1.0
+        self.zoom_panel.set_zoom(1.0)
 
         # Select the newly added layer in all views and update the UI
         self._extracted_from_on_layer_selected_27(0)
@@ -199,13 +207,16 @@ class DicomViewer(QMainWindow):
 
     # TODO Rename this here and in `load_dicom` and `on_layer_selected`
     def _extracted_from_on_layer_selected_27(self, arg0):
-        self.axial_controller.select_layer(arg0)
-        self.coronal_controller.select_layer(arg0)
-        self.sagittal_controller.select_layer(arg0)
+        self.axial_controller.selected_layer_index = arg0
+        self.coronal_controller.selected_layer_index = arg0
+        self.sagittal_controller.selected_layer_index = arg0
+        self.axial_controller.update_display()
+        self.coronal_controller.update_display()
+        self.sagittal_controller.update_display()
 
     def update_layer_controls(self):
         """
-                Updates the rotation and translation controls to match the currently
+                Updates the rotation, translation, opacity, and slice offset controls to match the currently
                 selected layer.
 
                 If no layer is selected, resets the controls to default values.
@@ -215,10 +226,14 @@ class DicomViewer(QMainWindow):
         if self.axial_controller.selected_layer_index is None:
             self.rotation_panel.set_rotations([0, 0, 0])
             self.translation_panel.set_offsets([0, 0])
+            self.opacity_slider.setValue(100)
+            self.slice_offset_slider.setValue(0)
         else:
             layer = self.axial_controller.volume_layers[self.axial_controller.selected_layer_index]
             self.rotation_panel.set_rotations(layer.rotation)
             self.translation_panel.set_offsets(layer.offset)
+            self.opacity_slider.setValue(int(layer.opacity * 100))
+            self.slice_offset_slider.setValue(layer.slice_offset)
 
     def on_rotation_changed(self, axis_index, value):
         """
@@ -230,8 +245,14 @@ class DicomViewer(QMainWindow):
                     2 for IS).
                     value: The new rotation value in degrees.
                 """
+        index = self.axial_controller.selected_layer_index
+        if index is None:
+            return
         for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
-            controller.update_rotation(axis_index, value)
+            if index < len(controller.volume_layers):
+                controller.volume_layers[index].rotation[axis_index] = value
+                controller.volume_layers[index].cached_rotated_volume = None
+                controller.update_display()
 
     def remove_current_layer(self):
         """
@@ -245,7 +266,10 @@ class DicomViewer(QMainWindow):
         if index is None:
             return
 
-        layer_name = self.layer_list.item(index).text()
+        item = self.layer_list.item(index)
+        if item is None:
+            return
+        layer_name = item.text()
 
         # Remove sliders (frames) for this layer
         slider_frames = self.layer_slider_rows.pop(layer_name, [])
@@ -260,25 +284,35 @@ class DicomViewer(QMainWindow):
                 # Frame already deleted — skip
                 continue
 
-        # Remove the image layer
+        # Remove the image layer from all views
         self.axial_controller.remove_current_layer()
+        self.coronal_controller.remove_current_layer()
+        self.sagittal_controller.remove_current_layer()
 
         # Remove the name from the list
         self.layer_list.takeItem(index)
 
         remaining = self.layer_list.count()
 
-        # Update selected_layer_index safely
+        # Update selected_layer_index safely for all views
         if remaining == 0:
             self.axial_controller.selected_layer_index = None
+            self.coronal_controller.selected_layer_index = None
+            self.sagittal_controller.selected_layer_index = None
         else:
             # If removed last item, select previous, else select same index
             new_index = min(index, remaining - 1)
             self.layer_list.setCurrentRow(new_index)
             self.axial_controller.selected_layer_index = new_index
+            self.coronal_controller.selected_layer_index = new_index
+            self.sagittal_controller.selected_layer_index = new_index
 
         # Refresh controls
         self.update_layer_controls()
+        # Also update all views
+        self.axial_controller.update_display()
+        self.coronal_controller.update_display()
+        self.sagittal_controller.update_display()
 
 
     def on_offset_changed(self, offset):
@@ -286,10 +320,33 @@ class DicomViewer(QMainWindow):
             This method updates the translation of the currently selected image layer
             in the viewer controller when the translation panel's offset is changed.
         """
-        print(f"Applying offset: {offset} to controllers")
         for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
-            print(f"Controller {controller} selected layer index: {controller.selected_layer_index}")
             controller.update_translation(offset)
+
+    def on_opacity_changed(self, value):
+        """
+            Updates the opacity of the currently selected layer in all views.
+        """
+        index = self.axial_controller.selected_layer_index
+        if index is None:
+            return
+        for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
+            layer = controller.volume_layers[index]
+            layer.opacity = value / 100.0
+            controller.update_display()
+
+    def on_slice_offset_changed(self, value):
+        """
+            Updates the slice offset of the currently selected layer in all views.
+        """
+        index = self.axial_controller.selected_layer_index
+        if index is None:
+            return
+        for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
+            layer = controller.volume_layers[index]
+            layer.slice_offset = value
+            controller.update_global_slice_slider_range()
+            controller.update_display()
 
     def reset_zoom(self):
         """
@@ -300,31 +357,17 @@ class DicomViewer(QMainWindow):
         self.current_zoom = 1.0
         self.zoom_panel.set_zoom(1.0)
 
-    def on_global_slice_changed(self, value):
-        """
-                This method synchronizes the slice index across axial, coronal,
-                and sagittal views by adjusting for each controller's global offset and
-                refreshing their displays.
-
-                Args:
-                    value: The new value from the global slice slider.
-                """
-        for controller in [self.axial_controller, self.coronal_controller, self.sagittal_controller]:
-            # Adjust slice index relative to each controller's global offset
-            controller.slice_index = value - controller.global_slice_offset
-            controller.update_display()
-
     def on_zoom_changed(self, new_zoom):
         """
-            This method resets the current transformation and applies the new zoom,
+            This method applies the new zoom factor relative to the current zoom,
             updating the internal zoom state.
 
             Args:
                 new_zoom: The new zoom factor to apply to the graphics view.
         """
+        scale_factor = new_zoom / self.current_zoom
         for viewer in [self.multi_view.axial_viewer, self.multi_view.coronal_viewer, self.multi_view.sagittal_viewer]:
-            viewer.view.resetTransform()
-            viewer.view.scale(new_zoom, new_zoom)
+            viewer.view.scale(scale_factor, scale_factor)
         self.current_zoom = new_zoom
 
     def reset_layer_controls(self):
@@ -355,32 +398,8 @@ class DicomViewer(QMainWindow):
         # Reset UI controls
         self.rotation_panel.reset_rotation()
         self.translation_panel.reset_trans()
-
-        self.axial_controller.reset_global_slice_slider()
-        self.coronal_controller.reset_global_slice_slider()
-        self.sagittal_controller.reset_global_slice_slider()
+        self.opacity_slider.setValue(100)
+        self.slice_offset_slider.setValue(0)
 
         self.zoom_panel.set_zoom(1.0)
         self.on_zoom_changed(1.0)
-
-        # Reset opacity and slice offset sliders & update their value labels
-        slider_frames = self.layer_slider_rows.get(layer.name, [])
-        for frame in slider_frames:
-            layout = frame.layout()
-            if not layout:
-                continue
-
-            label_item = layout.itemAt(0)
-            slider_item = layout.itemAt(1)
-
-            if label_item is None or slider_item is None:
-                continue
-
-        #reset the slider for the selected layer
-        reset_opacity_and_offset(
-            layer,
-            layer.opacity_slider,
-            layer.offset_slider,
-            update_display_cb=self.axial_controller.update_display
-        )
-
