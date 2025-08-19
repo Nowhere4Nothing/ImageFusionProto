@@ -33,7 +33,7 @@ class VTKEngine:
         self.blend.SetOpacity(0, 1.0)
         self.blend.SetOpacity(1, 0.5)
 
-        # Offscreen renderer
+        # Offscreen renderer (unused for display but kept for pipeline completeness)
         self.renderer = vtk.vtkRenderer()
         self.render_window = vtk.vtkRenderWindow()
         self.render_window.SetOffScreenRendering(1)
@@ -49,6 +49,7 @@ class VTKEngine:
         r.SetDirectoryName(str(Path(dicom_dir)))
         r.Update()
         self.fixed_reader = r
+        # ensure image spacing is present (vtk reader normally sets it)
         self._wire_blend()
         self._sync_reslice_output_to_fixed()
         return True
@@ -90,6 +91,14 @@ class VTKEngine:
         return self.fixed_reader.GetOutput().GetExtent()
 
     def get_slice_qimage(self, orientation: str, slice_idx: int) -> QtGui.QImage:
+        """
+        Extracts a 2D slice from the blended volume, or returns an empty QImage.
+        This function:
+         - extracts using numpy from vtk image scalars reshaped to (Z,Y,X)
+         - orients slice to (height, width)
+         - applies simple flips to make view upright
+         - scales the final QImage horizontally to preserve voxel aspect ratio
+        """
         if self.fixed_reader is None:
             return QtGui.QImage()
 
@@ -97,59 +106,83 @@ class VTKEngine:
         self.blend.Modified()
         self.blend.Update()
         img_data = self.blend.GetOutput()
-        extent = img_data.GetExtent()  # (x0,x1,y0,y1,z0,z1)
-        nx, ny, nz = extent[1]-extent[0]+1, extent[3]-extent[2]+1, extent[5]-extent[4]+1
+        if img_data is None or img_data.GetPointData() is None:
+            return QtGui.QImage()
 
-        # Convert VTK image to numpy array
+        extent = img_data.GetExtent()  # (x0,x1,y0,y1,z0,z1)
+        nx = extent[1] - extent[0] + 1
+        ny = extent[3] - extent[2] + 1
+        nz = extent[5] - extent[4] + 1
+
+        # Convert VTK image to numpy array (Z, Y, X)
         scalars = numpy_support.vtk_to_numpy(img_data.GetPointData().GetScalars())
-        arr = scalars.reshape((nz, ny, nx))  # (Z, Y, X)
+        if scalars is None:
+            return QtGui.QImage()
+        try:
+            arr = scalars.reshape((nz, ny, nx))
+        except Exception:
+            # Unexpected shape; return empty
+            return QtGui.QImage()
 
         spacing = img_data.GetSpacing()  # (sx, sy, sz)
+        sx, sy, sz = spacing
 
-        # Extract the correct slice and fix orientation
+        # Extract the slice and orient so the returned arr2d has shape (H, W)
         if orientation == self.ORI_AXIAL:
-            z = np.clip(slice_idx, 0, nz-1)
-            arr2d = arr[z, :, :]
-            arr2d = np.flipud(arr2d)  # correct vertical orientation
+            z = int(np.clip(slice_idx - extent[4], 0, nz - 1))
+            arr2d = arr[z, :, :]   # shape (Y, X)
+            # make head-up (flip vertically) — if your data needs different flip, invert this
+            arr2d = np.flipud(arr2d)
+            # For axial: columns correspond to X (sx), rows correspond to Y (sy)
+            # We'll scale width by sx/sy so mm across matches mm down
+            aspect_ratio = float(sx) / float(sy)
+
         elif orientation == self.ORI_CORONAL:
-            y = np.clip(slice_idx, extent[2], extent[3])
-            arr = numpy_support.vtk_to_numpy(img_data.GetPointData().GetScalars())
-            arr = arr.reshape((extent[5]-extent[4]+1, extent[3]-extent[2]+1, extent[1]-extent[0]+1))
-            arr2d = arr[:, y, :]  # Z x X
-            arr2d = np.rot90(arr2d, k=-1)  # rotate clockwise
-            # Apply spacing scaling
-            h, w = arr2d.shape
-            aspect_ratio = (spacing[2] / spacing[0])  # Z/X
-            arr2d = np.kron(arr2d, np.ones((int(aspect_ratio*100)/100,1)))  # simple scaling, or scale in QGraphicsView
+            # slice_idx provided in image IJK world: convert to 0..ny-1 by subtracting extent[2]
+            y = int(np.clip(slice_idx - extent[2], 0, ny - 1))
+            arr2d = arr[:, y, :]   # shape (Z, X) -> rows = Z, cols = X
+            # For coronal: columns X use sx, rows Z use sz -> scale width by sx/sz
+            aspect_ratio = float(sx) / float(sz)
+
         elif orientation == self.ORI_SAGITTAL:
-            x = np.clip(slice_idx, extent[0], extent[1])
-            arr = numpy_support.vtk_to_numpy(img_data.GetPointData().GetScalars())
-            arr = arr.reshape((extent[5]-extent[4]+1, extent[3]-extent[2]+1, extent[1]-extent[0]+1))
-            arr2d = arr[:, :, x]  # Z x Y
-            arr2d = np.rot90(arr2d, k=-1)
-            # Apply spacing scaling
-            h, w = arr2d.shape
-            aspect_ratio = (spacing[2] / spacing[1])  # Z/Y
-            arr2d = np.kron(arr2d, np.ones((int(aspect_ratio*100)/100,1)))
+            x = int(np.clip(slice_idx - extent[0], 0, nx - 1))
+            arr2d = arr[:, :, x]   # shape (Z, Y) -> rows = Z, cols = Y
+            # For sagittal: columns Y use sy, rows Z use sz -> scale width by sy/sz
+            aspect_ratio = float(sy) / float(sz)
 
-        # Normalize to 0-255
+        else:
+            return QtGui.QImage()
+
+        # Normalize to 0-255 (simple min-max, change to WL/WW if desired)
         arr2d = arr2d.astype(np.float32)
-        arr2d -= arr2d.min()
-        if arr2d.max() > 0:
-            arr2d /= arr2d.max()
-        arr2d = (arr2d*255).astype(np.uint8)
+        mn = float(arr2d.min())
+        arr2d -= mn
+        mx = float(arr2d.max())
+        if mx > 0.0:
+            arr2d /= mx
+        arr2d = (arr2d * 255.0).astype(np.uint8)
 
-        # Ensure C-contiguous for QImage
+        # Ensure contiguous memory for QImage
         arr2d = np.ascontiguousarray(arr2d)
 
-        # Convert to QImage
+        # Convert to QImage (Format_Grayscale8 expects row-major (H,W) with bytes)
         h, w = arr2d.shape
         qimg = QtGui.QImage(arr2d.data, w, h, w, QtGui.QImage.Format_Grayscale8)
+
+        # Compute integer scaled width to respect voxel aspect ratio (at least 1 pixel)
+        # Note: if aspect_ratio < 1 this will shrink width; that's fine.
+        try:
+            new_w = max(1, int(round(w * aspect_ratio)))
+        except Exception:
+            new_w = w
+
+        # Scale the image horizontally to keep voxel proportions. Use IgnoreAspectRatio to
+        # force the exact pixel aspect target (we already set the desired dims).
+        qimg = qimg.scaled(new_w, h, QtCore.Qt.IgnoreAspectRatio)
+
         return qimg.copy()
 
-
-
-    # Internals
+    # -------- Internals --------
     def _apply_transform(self):
         if not self.fixed_reader or not self.moving_reader:
             return
@@ -240,9 +273,9 @@ class FusionUI(QtWidgets.QWidget):
             s.setMinimum(mini)
             s.setMaximum(maxi)
             s.setValue(init)
-            s.setTickInterval((maxi-mini)//10)
+            s.setTickInterval(max(1, (maxi-mini)//10))
             s.setSingleStep(1)
-            s.setPageStep(10)
+            s.setPageStep(max(1, (maxi-mini)//10))
             return s
 
         self.s_axial = slider(0,0,0)
