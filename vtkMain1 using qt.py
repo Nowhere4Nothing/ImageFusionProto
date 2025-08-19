@@ -73,6 +73,15 @@ class VTKEngine:
             r.SetBackgroundLevel(0.0)
             r.SetInputConnection(self.blend.GetOutputPort())
 
+    # small helper: convert vtkMatrix4x4 to 3x3 numpy of direction cosines
+    @staticmethod
+    def _vtk_dir_to_np3(dir4: vtk.vtkMatrix4x4) -> np.ndarray:
+        d = np.zeros((3, 3), dtype=float)
+        for r in range(3):
+            for c in range(3):
+                d[r, c] = dir4.GetElement(r, c)
+        return d
+
     # -------- Public API --------
     def load_fixed(self, dicom_dir: str):
         r = vtk.vtkDICOMImageReader()
@@ -118,54 +127,119 @@ class VTKEngine:
         """
         Returns a uint8 2D array (H x W) ready for QImage/QPixmap.
         WL/WW applied to the blended slice.
+
+        Note: This function builds reslice-axes using the fixed volume's direction cosines
+        and spacing, which preserves physical aspect ratio and orientation for coronal/sagittal.
+        If the coronal/sagittal images still need a small rotate/flip to match your
+        convention, see the commented "post-process" lines below.
         """
         if self.fixed_reader is None:
             return None
 
-        blend_out = self.blend.GetOutput()
         fixed = self.fixed_reader.GetOutput()
+        if fixed is None:
+            return None
+
         extent = fixed.GetExtent()  # (x0,x1,y0,y1,z0,z1)
         spacing = fixed.GetSpacing()
         origin = fixed.GetOrigin()
         dir4 = fixed.GetDirectionMatrix()
 
-        # Clamp index and build a per-slice reslice-axes (FIXED geometry)
+        # Convert VTK direction 4x4 -> 3x3 numpy (cols = direction cosines for X,Y,Z)
+        dir3 = self._vtk_dir_to_np3(dir4)  # shape (3,3)
+        spacing_np = np.array(spacing, dtype=float)
+        origin_np = np.array(origin, dtype=float)
+
+        # Build reslice axes matrix (world-space vectors scaled by spacing)
         idx = index
         axes = vtk.vtkMatrix4x4()
-        axes.DeepCopy(dir4)
+        axes.Identity()
 
         if orientation == self.ORI_AXIAL:
             idx = int(np.clip(idx, extent[4], extent[5]))
-            oz = origin[2] + idx * spacing[2]
-            axes.SetElement(0, 3, origin[0])
-            axes.SetElement(1, 3, origin[1])
-            axes.SetElement(2, 3, oz)
+            # output X -> fixed X, output Y -> fixed Y, normal -> fixed Z
+            world_x = dir3[:, 0] * spacing_np[0]
+            world_y = dir3[:, 1] * spacing_np[1]
+            world_z = dir3[:, 2] * spacing_np[2]
+            origin_slice = origin_np + world_z * idx
         elif orientation == self.ORI_CORONAL:
             idx = int(np.clip(idx, extent[2], extent[3]))
-            oy = origin[1] + idx * spacing[1]
-            axes.SetElement(0, 3, origin[0])
-            axes.SetElement(1, 3, oy)
-            axes.SetElement(2, 3, origin[2])
+            # For coronal: span fixed X (output X) and fixed Z (output Y), normal = fixed Y
+            world_x = dir3[:, 0] * spacing_np[0]   # fixed X
+            world_y = dir3[:, 2] * spacing_np[2]   # fixed Z -> make rows map to Z
+            world_z = dir3[:, 1] * spacing_np[1]   # normal = fixed Y
+            origin_slice = origin_np + world_z * idx
         elif orientation == self.ORI_SAGITTAL:
             idx = int(np.clip(idx, extent[0], extent[1]))
-            ox = origin[0] + idx * spacing[0]
-            axes.SetElement(0, 3, ox)
-            axes.SetElement(1, 3, origin[1])
-            axes.SetElement(2, 3, origin[2])
+            # For sagittal: span fixed Y (output X) and fixed Z (output Y), normal = fixed X
+            world_x = dir3[:, 1] * spacing_np[1]   # fixed Y
+            world_y = dir3[:, 2] * spacing_np[2]   # fixed Z
+            world_z = dir3[:, 0] * spacing_np[0]   # normal = fixed X
+            origin_slice = origin_np + world_z * idx
         else:
             return None
 
+        # write the vectors into the axes matrix columns
+        for row in range(3):
+            axes.SetElement(row, 0, float(world_x[row]))
+            axes.SetElement(row, 1, float(world_y[row]))
+            axes.SetElement(row, 2, float(world_z[row]))
+        axes.SetElement(0, 3, float(origin_slice[0]))
+        axes.SetElement(1, 3, float(origin_slice[1]))
+        axes.SetElement(2, 3, float(origin_slice[2]))
+
+        # Ensure the processing pipeline is up-to-date:
+        # 1) If there's a moving volume, update the 3D reslice that produces MOVING->FIXED.
+        if self.moving_reader is not None:
+            try:
+                self.reslice3d.Modified()
+                self.reslice3d.Update()
+            except Exception:
+                pass
+
+        # 2) Update the blend (FIXED + resliced MOVING)
+        self.blend.Modified()
+        try:
+            self.blend.Update()
+        except Exception:
+            return None
+
+        # 3) Configure and update the per-orientation reslicer
         r = self.slice_reslicers[orientation]
         r.SetResliceAxes(axes)
-        r.SetInputData(blend_out)  # ensure it's wired to current blended volume
-        r.Update()
+        r.SetInputConnection(self.blend.GetOutputPort())
+        r.Modified()
+        try:
+            r.Update()
+        except Exception:
+            return None
 
         sl = r.GetOutput()
+        if sl is None or sl.GetPointData() is None or sl.GetPointData().GetScalars() is None:
+            return None
+
         dims = sl.GetDimensions()  # X, Y, 1
         if dims[0] == 0 or dims[1] == 0:
             return None
 
+        # Convert scalars to numpy in H, W ordering
         arr = vtk_to_numpy(sl.GetPointData().GetScalars()).reshape(dims[1], dims[0])  # H, W
+
+        # --- Optional post-process (uncomment if your coronal/sagittal appear rotated/mirrored)
+        # Many display conventions differ (row/col order or L/R flips). If the coronal or sagittal
+        # view looks rotated 90° or mirrored, try one of these lines for that orientation:
+        #
+        # For coronal:
+        # arr = np.rot90(arr, k=1)      # rotate 90° CCW
+        # arr = np.rot90(arr, k=3)      # rotate 90° CW
+        # arr = np.flipud(arr)          # vertical flip
+        # arr = arr.T                   # transpose
+        #
+        # For sagittal:
+        # arr = np.rot90(arr, k=1)
+        # arr = arr.T
+        #
+        # (Don't enable them here by default - enable only if you need to match a specific orientation)
 
         # Apply WL/WW to uint8 (like CT default, tweak as needed)
         if ww <= 0:
@@ -174,6 +248,7 @@ class VTKEngine:
         hi = wl + ww / 2.0
         arr = np.clip((arr - lo) / (hi - lo), 0.0, 1.0)
         return (arr * 255.0 + 0.5).astype(np.uint8)
+
 
     # -------- Internals --------
     def _apply_transform(self):
@@ -184,6 +259,7 @@ class VTKEngine:
         t.RotateX(self._rx)
         t.RotateY(self._ry)
         t.RotateZ(self._rz)
+        # copy the transform into our vtkTransform
         self.transform.DeepCopy(t)
         # Put transform into reslice3d as axes
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
@@ -280,8 +356,12 @@ class FusionUI(QtWidgets.QWidget):
         self.s_ty.valueChanged.connect(lambda v: self.tyChanged.emit(float(v)))
         self.s_tz.valueChanged.connect(lambda v: self.tzChanged.emit(float(v)))
         self.s_rx.valueChanged.connect(lambda v: self.rxChanged.emit(float(v)))
-        self.s_ry.valueChanged.connect(lambda v: self.ryChanged.emit(float(v)))
+        self.s_ry.valueChanged.connect(lambda v: self.ryChanged.connect if False else self.ryChanged.emit(float(v)))  # keep explicit connections below
         self.s_rz.valueChanged.connect(lambda v: self.rzChanged.emit(float(v)))
+        # restore normal ry connection properly:
+        self.s_ry.valueChanged.disconnect()
+        self.s_ry.valueChanged.connect(lambda v: self.ryChanged.emit(float(v)))
+
         self.s_op.valueChanged.connect(lambda v: self.opacityChanged.emit(float(v) / 100.0))
 
         form.addRow("TX (mm)", self.s_tx)
@@ -413,19 +493,46 @@ class Controller(QtCore.QObject):
         if img is None:
             return
         h, w = img.shape
-        # Make QImage that owns its own copy (avoid lifespan issues)
+
+        # Get spacing from FIXED volume
+        dx, dy, dz = self.engine.fixed_reader.GetOutput().GetSpacing()
+
+        if orientation == VTKEngine.ORI_AXIAL:
+            scale_x, scale_y = 1.0, 1.0  # axial is already correct
+        elif orientation == VTKEngine.ORI_CORONAL:
+            # coronal slice: X (width) vs Z (height)
+            scale_x = 1.0
+            scale_y = dz / dx  # slice thickness / in-plane X spacing
+        elif orientation == VTKEngine.ORI_SAGITTAL:
+            # sagittal slice: Y (width) vs Z (height)
+            scale_x = 1.0
+            scale_y = dz / dy  # slice thickness / in-plane Y spacing
+        else:
+            scale_x = scale_y = 1.0
+
+
+        # Make QImage
         qimg = QtGui.QImage(img.data, w, h, w, QtGui.QImage.Format_Grayscale8).copy()
         pix = QtGui.QPixmap.fromImage(qimg)
 
+        # Apply spacing correction using QGraphicsItem scale
+        pix_item = self._create_scaled_pixmap(pix, scale_x, scale_y)
+
         if orientation == VTKEngine.ORI_AXIAL:
-            self.ui.scene_ax.clear(); self.ui.scene_ax.addPixmap(pix)
+            self.ui.scene_ax.clear(); self.ui.scene_ax.addItem(pix_item)
             self.ui.view_ax.fitInView(self.ui.scene_ax.itemsBoundingRect(), QtCore.Qt.KeepAspectRatio)
         elif orientation == VTKEngine.ORI_CORONAL:
-            self.ui.scene_co.clear(); self.ui.scene_co.addPixmap(pix)
+            self.ui.scene_co.clear(); self.ui.scene_co.addItem(pix_item)
             self.ui.view_co.fitInView(self.ui.scene_co.itemsBoundingRect(), QtCore.Qt.KeepAspectRatio)
         elif orientation == VTKEngine.ORI_SAGITTAL:
-            self.ui.scene_sa.clear(); self.ui.scene_sa.addPixmap(pix)
+            self.ui.scene_sa.clear(); self.ui.scene_sa.addItem(pix_item)
             self.ui.view_sa.fitInView(self.ui.scene_sa.itemsBoundingRect(), QtCore.Qt.KeepAspectRatio)
+
+
+    def _create_scaled_pixmap(self, pix: QtGui.QPixmap, scale_x: float, scale_y: float) -> QtWidgets.QGraphicsPixmapItem:
+        item = QtWidgets.QGraphicsPixmapItem(pix)
+        item.setTransform(QtGui.QTransform().scale(scale_x, scale_y))
+        return item
 
 
 # ------------------------------ App entry ------------------------------
