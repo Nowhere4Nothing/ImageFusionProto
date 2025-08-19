@@ -13,7 +13,8 @@ dependencies = [
     "pydicom (>=3.0.1,<4.0.0)",
     "pyside6 (>=6.9.1,<7.0.0)",
     "simpleitk (>=2.5.2,<3.0.0)",
-    "opencv-python >=4.10.0,<5.0.0" # this lets the proram input different layers if they are different sized dcm
+    "opencv-python >=4.10.0,<5.0.0", # this lets the proram input different layers if they are different sized dcm
+    "pybind11 (>=3.0.0,<4.0.0)"
 ]
 
 [build-system]

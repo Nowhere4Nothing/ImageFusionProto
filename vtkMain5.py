@@ -1,12 +1,12 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
-import numpy as np
 from PySide6 import QtCore, QtWidgets, QtGui
 import vtk
 from vtkmodules.util import numpy_support
+import vtk_slice_backend
 
-# ------------------------------ VTK Processing Engine ------------------------------
+# ------------------------------ VTK Engine ------------------------------
 
 class VTKEngine:
     ORI_AXIAL = "axial"
@@ -16,24 +16,16 @@ class VTKEngine:
     def __init__(self):
         self.fixed_reader = None
         self.moving_reader = None
-
-        # Transform parameters
         self._tx = self._ty = self._tz = 0.0
         self._rx = self._ry = self._rz = 0.0
         self.transform = vtk.vtkTransform()
         self.transform.PostMultiply()
-
-        # Reslice moving image
         self.reslice3d = vtk.vtkImageReslice()
         self.reslice3d.SetInterpolationModeToLinear()
         self.reslice3d.SetBackgroundLevel(0.0)
-
-        # Blend
         self.blend = vtk.vtkImageBlend()
         self.blend.SetOpacity(0, 1.0)
         self.blend.SetOpacity(1, 0.5)
-
-        # Offscreen renderer (unused for display but kept for pipeline completeness)
         self.renderer = vtk.vtkRenderer()
         self.render_window = vtk.vtkRenderWindow()
         self.render_window.SetOffScreenRendering(1)
@@ -41,23 +33,21 @@ class VTKEngine:
         self.vtk_image_actor = vtk.vtkImageActor()
         self.renderer.AddActor(self.vtk_image_actor)
 
+    # ---------------- Loading ----------------
     def load_fixed(self, dicom_dir: str) -> bool:
         files = list(Path(dicom_dir).glob("*"))
-        if not any(f.is_file() for f in files):
-            return False
+        if not any(f.is_file() for f in files): return False
         r = vtk.vtkDICOMImageReader()
         r.SetDirectoryName(str(Path(dicom_dir)))
         r.Update()
         self.fixed_reader = r
-        # ensure image spacing is present (vtk reader normally sets it)
         self._wire_blend()
         self._sync_reslice_output_to_fixed()
         return True
 
     def load_moving(self, dicom_dir: str) -> bool:
         files = list(Path(dicom_dir).glob("*"))
-        if not any(f.is_file() for f in files):
-            return False
+        if not any(f.is_file() for f in files): return False
         r = vtk.vtkDICOMImageReader()
         r.SetDirectoryName(str(Path(dicom_dir)))
         r.Update()
@@ -68,15 +58,16 @@ class VTKEngine:
         self._sync_reslice_output_to_fixed()
         return True
 
+    # ---------------- Transform ----------------
     def set_opacity(self, alpha: float):
-        self.blend.SetOpacity(1, float(np.clip(alpha, 0.0, 1.0)))
+        self.blend.SetOpacity(1, float(max(0.0,min(1.0,alpha))))
 
     def set_translation(self, tx: float, ty: float, tz: float):
-        self._tx, self._ty, self._tz = float(tx), float(ty), float(tz)
+        self._tx, self._ty, self._tz = tx, ty, tz
         self._apply_transform()
 
     def set_rotation_deg(self, rx: float, ry: float, rz: float):
-        self._rx, self._ry, self._rz = float(rx), float(ry), float(rz)
+        self._rx, self._ry, self._rz = rx, ry, rz
         self._apply_transform()
 
     def reset_transform(self):
@@ -85,140 +76,78 @@ class VTKEngine:
         self.transform.Identity()
         self._apply_transform()
 
+    # ---------------- Slice Extraction ----------------
     def fixed_extent(self):
-        if not self.fixed_reader:
-            return None
+        if not self.fixed_reader: return None
         return self.fixed_reader.GetOutput().GetExtent()
 
     def get_slice_qimage(self, orientation: str, slice_idx: int) -> QtGui.QImage:
-        """
-        Extracts a 2D slice from the blended volume, or returns an empty QImage.
-        This function:
-         - extracts using numpy from vtk image scalars reshaped to (Z,Y,X)
-         - orients slice to (height, width)
-         - applies simple flips to make view upright
-         - scales the final QImage horizontally to preserve voxel aspect ratio
-        """
         if self.fixed_reader is None:
             return QtGui.QImage()
 
-        # Update blend output
         self.blend.Modified()
         self.blend.Update()
         img_data = self.blend.GetOutput()
         if img_data is None or img_data.GetPointData() is None:
             return QtGui.QImage()
 
-        extent = img_data.GetExtent()  # (x0,x1,y0,y1,z0,z1)
-        nx = extent[1] - extent[0] + 1
-        ny = extent[3] - extent[2] + 1
-        nz = extent[5] - extent[4] + 1
-
-        # Convert VTK image to numpy array (Z, Y, X)
         scalars = numpy_support.vtk_to_numpy(img_data.GetPointData().GetScalars())
         if scalars is None:
             return QtGui.QImage()
-        try:
-            arr = scalars.reshape((nz, ny, nx))
-        except Exception:
-            # Unexpected shape; return empty
-            return QtGui.QImage()
 
-        spacing = img_data.GetSpacing()  # (sx, sy, sz)
-        sx, sy, sz = spacing
+        extent = img_data.GetExtent()
+        nx = extent[1]-extent[0]+1
+        ny = extent[3]-extent[2]+1
+        nz = extent[5]-extent[4]+1
+        scalars = scalars.reshape((nz, ny, nx)).astype(np.uint8)
 
-        # Extract the slice and orient so the returned arr2d has shape (H, W)
-        if orientation == self.ORI_AXIAL:
-            z = int(np.clip(slice_idx - extent[4], 0, nz - 1))
-            arr2d = arr[z, :, :]   # shape (Y, X)
-            # make head-up (flip vertically) — if your data needs different flip, invert this
-            arr2d = np.flipud(arr2d)
-            # For axial: columns correspond to X (sx), rows correspond to Y (sy)
-            # We'll scale width by sx/sy so mm across matches mm down
-            aspect_ratio = float(sx) / float(sy)
+        arr2d = vtk_slice_backend.get_slice_fast(scalars, orientation, slice_idx)
 
-        elif orientation == self.ORI_CORONAL:
-            # slice_idx provided in image IJK world: convert to 0..ny-1 by subtracting extent[2]
-            y = int(np.clip(slice_idx - extent[2], 0, ny - 1))
-            arr2d = arr[:, y, :]   # shape (Z, X) -> rows = Z, cols = X
-            # For coronal: columns X use sx, rows Z use sz -> scale width by sx/sz
-            aspect_ratio = float(sx) / float(sz)
+        # Compute aspect ratio
+        sx, sy, sz = img_data.GetSpacing()
+        if orientation == self.ORI_AXIAL: aspect_ratio = float(sx)/float(sy)
+        elif orientation == self.ORI_CORONAL: aspect_ratio = float(sx)/float(sz)
+        else: aspect_ratio = float(sy)/float(sz)
 
-        elif orientation == self.ORI_SAGITTAL:
-            x = int(np.clip(slice_idx - extent[0], 0, nx - 1))
-            arr2d = arr[:, :, x]   # shape (Z, Y) -> rows = Z, cols = Y
-            # For sagittal: columns Y use sy, rows Z use sz -> scale width by sy/sz
-            aspect_ratio = float(sy) / float(sz)
-
-        else:
-            return QtGui.QImage()
-
-        # Normalize to 0-255 (simple min-max, change to WL/WW if desired)
-        arr2d = arr2d.astype(np.float32)
-        mn = float(arr2d.min())
-        arr2d -= mn
-        mx = float(arr2d.max())
-        if mx > 0.0:
-            arr2d /= mx
-        arr2d = (arr2d * 255.0).astype(np.uint8)
-
-        # Ensure contiguous memory for QImage
         arr2d = np.ascontiguousarray(arr2d)
-
-        # Convert to QImage (Format_Grayscale8 expects row-major (H,W) with bytes)
-        h, w = arr2d.shape
+        h,w = arr2d.shape
         qimg = QtGui.QImage(arr2d.data, w, h, w, QtGui.QImage.Format_Grayscale8)
-
-        # Compute integer scaled width to respect voxel aspect ratio (at least 1 pixel)
-        # Note: if aspect_ratio < 1 this will shrink width; that's fine.
-        try:
-            new_w = max(1, int(round(w * aspect_ratio)))
-        except Exception:
-            new_w = w
-
-        # Scale the image horizontally to keep voxel proportions. Use IgnoreAspectRatio to
-        # force the exact pixel aspect target (we already set the desired dims).
-        qimg = qimg.scaled(new_w, h, QtCore.Qt.IgnoreAspectRatio)
-
+        new_w = max(1,int(round(w*aspect_ratio)))
+        qimg = qimg.scaled(new_w,h,QtCore.Qt.IgnoreAspectRatio)
         return qimg.copy()
 
-    # -------- Internals --------
+    # ---------------- Internal ----------------
     def _apply_transform(self):
-        if not self.fixed_reader or not self.moving_reader:
-            return
+        if not self.fixed_reader or not self.moving_reader: return
         img = self.fixed_reader.GetOutput()
-        center = np.array(img.GetCenter())
-
+        center = img.GetCenter()
         t = vtk.vtkTransform()
         t.PostMultiply()
-        t.Translate(-center)
+        t.Translate(-center[0],-center[1],-center[2])
         t.RotateX(self._rx)
         t.RotateY(self._ry)
         t.RotateZ(self._rz)
-        t.Translate(center)
-        t.Translate(self._tx, self._ty, self._tz)
+        t.Translate(center[0],center[1],center[2])
+        t.Translate(self._tx,self._ty,self._tz)
         self.transform.DeepCopy(t)
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
         self.reslice3d.Modified()
 
     def _wire_blend(self):
         self.blend.RemoveAllInputs()
-        if self.fixed_reader is not None:
-            self.blend.AddInputConnection(self.fixed_reader.GetOutputPort())
-        if self.moving_reader is not None:
-            self.blend.AddInputConnection(self.reslice3d.GetOutputPort())
+        if self.fixed_reader: self.blend.AddInputConnection(self.fixed_reader.GetOutputPort())
+        if self.moving_reader: self.blend.AddInputConnection(self.reslice3d.GetOutputPort())
         self.blend.Modified()
 
     def _sync_reslice_output_to_fixed(self):
-        if self.fixed_reader is None:
-            return
+        if not self.fixed_reader: return
         fixed = self.fixed_reader.GetOutput()
         self.reslice3d.SetOutputSpacing(fixed.GetSpacing())
         self.reslice3d.SetOutputOrigin(fixed.GetOrigin())
         self.reslice3d.SetOutputExtent(fixed.GetExtent())
         self.reslice3d.Modified()
 
-# ------------------------------ Qt Display ------------------------------
+# -------------------- SliceGraphicsView --------------------
 
 class SliceGraphicsView(QtWidgets.QGraphicsView):
     def __init__(self):
@@ -233,7 +162,7 @@ class SliceGraphicsView(QtWidgets.QGraphicsView):
         self.pixmap_item.setPixmap(pix)
         self.fitInView(self.pixmap_item, QtCore.Qt.KeepAspectRatio)
 
-# ------------------------------ Qt UI ------------------------------
+# -------------------- UI --------------------
 
 class FusionUI(QtWidgets.QWidget):
     loadFixed = QtCore.Signal(str)
@@ -252,15 +181,15 @@ class FusionUI(QtWidgets.QWidget):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Manual Co-Registration Demo (Offscreen VTK + QGraphicsView)")
+        self.setWindowTitle("Manual Co-Registration Demo")
         self.resize(1400, 900)
         self._build()
 
+    # --- UI Construction (same as your previous code) ---
     def _build(self):
         root = QtWidgets.QHBoxLayout(self)
         left = QtWidgets.QWidget(self)
         form = QtWidgets.QFormLayout(left)
-
         btn_fixed = QtWidgets.QPushButton("Load FIXED DICOM")
         btn_moving = QtWidgets.QPushButton("Load MOVING DICOM")
         btn_fixed.clicked.connect(lambda: self._emit_folder(self.loadFixed))
@@ -268,14 +197,11 @@ class FusionUI(QtWidgets.QWidget):
         form.addRow(btn_fixed)
         form.addRow(btn_moving)
 
-        def slider(mini, maxi, init=0):
+        def slider(mini,maxi,init=0):
             s = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-            s.setMinimum(mini)
-            s.setMaximum(maxi)
-            s.setValue(init)
-            s.setTickInterval(max(1, (maxi-mini)//10))
-            s.setSingleStep(1)
-            s.setPageStep(max(1, (maxi-mini)//10))
+            s.setMinimum(mini); s.setMaximum(maxi); s.setValue(init)
+            s.setTickInterval(max(1,(maxi-mini)//10))
+            s.setSingleStep(1); s.setPageStep(max(1,(maxi-mini)//10))
             return s
 
         self.s_axial = slider(0,0,0)
@@ -288,7 +214,6 @@ class FusionUI(QtWidgets.QWidget):
         form.addRow("Coronal Slice", self.s_coronal)
         form.addRow("Sagittal Slice", self.s_sagittal)
 
-        # Transforms
         self.s_tx = slider(-200,200,0)
         self.s_ty = slider(-200,200,0)
         self.s_tz = slider(-200,200,0)
@@ -297,13 +222,13 @@ class FusionUI(QtWidgets.QWidget):
         self.s_rz = slider(-1800,1800,0)
         self.s_op = slider(0,100,50)
 
-        self.s_tx.valueChanged.connect(lambda v: self.txChanged.emit(float(v)))
-        self.s_ty.valueChanged.connect(lambda v: self.tyChanged.emit(float(v)))
-        self.s_tz.valueChanged.connect(lambda v: self.tzChanged.emit(float(v)))
-        self.s_rx.valueChanged.connect(lambda v: self.rxChanged.emit(float(v/10.0)))
-        self.s_ry.valueChanged.connect(lambda v: self.ryChanged.emit(float(v/10.0)))
-        self.s_rz.valueChanged.connect(lambda v: self.rzChanged.emit(float(v/10.0)))
-        self.s_op.valueChanged.connect(lambda v: self.opacityChanged.emit(float(v)/100.0))
+        self.s_tx.valueChanged.connect(lambda v:self.txChanged.emit(float(v)))
+        self.s_ty.valueChanged.connect(lambda v:self.tyChanged.emit(float(v)))
+        self.s_tz.valueChanged.connect(lambda v:self.tzChanged.emit(float(v)))
+        self.s_rx.valueChanged.connect(lambda v:self.rxChanged.emit(float(v/10.0)))
+        self.s_ry.valueChanged.connect(lambda v:self.ryChanged.emit(float(v/10.0)))
+        self.s_rz.valueChanged.connect(lambda v:self.rzChanged.emit(float(v/10.0)))
+        self.s_op.valueChanged.connect(lambda v:self.opacityChanged.emit(float(v)/100.0))
 
         form.addRow("TX (mm)", self.s_tx)
         form.addRow("TY (mm)", self.s_ty)
@@ -317,7 +242,6 @@ class FusionUI(QtWidgets.QWidget):
         btn_reset.clicked.connect(self.resetRequested.emit)
         form.addRow(btn_reset)
 
-        # Graphics views for slices
         right = QtWidgets.QWidget(self)
         grid = QtWidgets.QGridLayout(right)
         self.viewer_ax = SliceGraphicsView()
@@ -326,16 +250,14 @@ class FusionUI(QtWidgets.QWidget):
         grid.addWidget(self.viewer_ax,0,0)
         grid.addWidget(self.viewer_co,0,1)
         grid.addWidget(self.viewer_sa,1,0,1,2)
-
         root.addWidget(left,1)
         root.addWidget(right,2)
 
     def _emit_folder(self, signal: QtCore.SignalInstance):
-        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Select DICOM folder")
-        if folder:
-            signal.emit(folder)
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self,"Select DICOM folder")
+        if folder: signal.emit(folder)
 
-# ------------------------------ Controller ------------------------------
+# -------------------- Controller --------------------
 
 class Controller(QtCore.QObject):
     DEBOUNCE_MS = 50
@@ -350,51 +272,47 @@ class Controller(QtCore.QObject):
     def _wire(self):
         self.ui.loadFixed.connect(self.on_load_fixed)
         self.ui.loadMoving.connect(self.on_load_moving)
-        self.ui.txChanged.connect(lambda v: self._update_transform())
-        self.ui.tyChanged.connect(lambda v: self._update_transform())
-        self.ui.tzChanged.connect(lambda v: self._update_transform())
-        self.ui.rxChanged.connect(lambda v: self._update_transform())
-        self.ui.ryChanged.connect(lambda v: self._update_transform())
-        self.ui.rzChanged.connect(lambda v: self._update_transform())
-        self.ui.opacityChanged.connect(lambda a: self._update_opacity(a))
+        for s in [self.ui.txChanged,self.ui.tyChanged,self.ui.tzChanged,
+                  self.ui.rxChanged,self.ui.ryChanged,self.ui.rzChanged]:
+            s.connect(lambda v: self._update_transform())
+        self.ui.opacityChanged.connect(lambda a:self._update_opacity(a))
         self.ui.resetRequested.connect(self.on_reset)
-        self.ui.axialSliceChanged.connect(lambda i: self.refresh_slice("axial",i))
-        self.ui.coronalSliceChanged.connect(lambda i: self.refresh_slice("coronal",i))
-        self.ui.sagittalSliceChanged.connect(lambda i: self.refresh_slice("sagittal",i))
+        self.ui.axialSliceChanged.connect(lambda i:self.refresh_slice("axial",i))
+        self.ui.coronalSliceChanged.connect(lambda i:self.refresh_slice("coronal",i))
+        self.ui.sagittalSliceChanged.connect(lambda i:self.refresh_slice("sagittal",i))
 
     def _update_transform(self):
-        self.engine.set_translation(self.ui.s_tx.value(), self.ui.s_ty.value(), self.ui.s_tz.value())
-        self.engine.set_rotation_deg(self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0)
+        self.engine.set_translation(self.ui.s_tx.value(),self.ui.s_ty.value(),self.ui.s_tz.value())
+        self.engine.set_rotation_deg(self.ui.s_rx.value()/10.0,
+                                     self.ui.s_ry.value()/10.0,
+                                     self.ui.s_rz.value()/10.0)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
-    def _update_opacity(self, a: float):
+    def _update_opacity(self,a:float):
         self.engine.set_opacity(a)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
-    def on_load_fixed(self, folder:str):
+    def on_load_fixed(self,folder:str):
         if not self.engine.load_fixed(folder):
-            QtWidgets.QMessageBox.warning(self.ui,"Error","No DICOM files found in folder!")
+            QtWidgets.QMessageBox.warning(self.ui,"Error","No DICOM files found!")
             return
         self._sync_slice_ranges()
         self.refresh_all()
 
-    def on_load_moving(self, folder:str):
+    def on_load_moving(self,folder:str):
         if not self.engine.load_moving(folder):
-            QtWidgets.QMessageBox.warning(self.ui,"Error","No DICOM files found in folder!")
+            QtWidgets.QMessageBox.warning(self.ui,"Error","No DICOM files found!")
             return
         self.refresh_all()
 
     def on_reset(self):
         self.engine.reset_transform()
         self.refresh_all()
-        self.ui.s_rx.setValue(0)
-        self.ui.s_ry.setValue(0)
-        self.ui.s_rz.setValue(0)
+        self.ui.s_rx.setValue(0); self.ui.s_ry.setValue(0); self.ui.s_rz.setValue(0)
 
     def _sync_slice_ranges(self):
         ext = self.engine.fixed_extent()
-        if not ext:
-            return
+        if not ext: return
         x0,x1,y0,y1,z0,z1 = ext
         self.ui.s_axial.setMinimum(z0); self.ui.s_axial.setMaximum(z1); self.ui.s_axial.setValue((z0+z1)//2)
         self.ui.s_coronal.setMinimum(y0); self.ui.s_coronal.setMaximum(y1); self.ui.s_coronal.setValue((y0+y1)//2)
@@ -406,21 +324,20 @@ class Controller(QtCore.QObject):
         self.refresh_slice("sagittal",self.ui.s_sagittal.value())
 
     def refresh_slice(self, orientation:str, idx:int):
-        qimg = self.engine.get_slice_qimage(orientation, idx)
-        viewer_map = {"axial": self.ui.viewer_ax, "coronal": self.ui.viewer_co, "sagittal": self.ui.viewer_sa}
+        qimg = self.engine.get_slice_qimage(orientation,idx)
+        viewer_map = {"axial":self.ui.viewer_ax,"coronal":self.ui.viewer_co,"sagittal":self.ui.viewer_sa}
         viewer = viewer_map.get(orientation)
-        if viewer:
-            viewer.set_slice_qimage(qimg)
+        if viewer: viewer.set_slice_qimage(qimg)
 
-# ------------------------------ Main ------------------------------
+# -------------------- Main --------------------
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
     ui = FusionUI()
     engine = VTKEngine()
-    Controller(ui, engine)
+    Controller(ui,engine)
     ui.show()
     sys.exit(app.exec())
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
