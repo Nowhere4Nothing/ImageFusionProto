@@ -1,172 +1,152 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/numpy.h>
 #include <vtkSmartPointer.h>
-#include <vtkDICOMImageReader.h>
+#include <vtkImageData.h>
 #include <vtkImageReslice.h>
 #include <vtkImageBlend.h>
-#include <vtkTransform.h>
-#include <vtkImageData.h>
-#include <vtkPointData.h>
 #include <vtkMatrix4x4.h>
-#include <vtkImageCast.h>
-#include <vtkImageShiftScale.h>
-#include <string>
-#include <algorithm>
+#include <vtkTransform.h>
+#include <vtkPointData.h>
+#include <vtkDICOMImageReader.h>
 
 namespace py = pybind11;
 
-class VTKEngine {
+class VTKSliceExtractor {
 public:
-    VTKEngine() {
-        transform->PostMultiply();
+    VTKSliceExtractor() {
+        reslice = vtkSmartPointer<vtkImageReslice>::New();
         reslice->SetInterpolationModeToLinear();
-        reslice->SetBackgroundLevel(0.0);
+        reslice->SetAutoCropOutput(1);
+
+        blend = vtkSmartPointer<vtkImageBlend>::New();
         blend->SetOpacity(0, 1.0);
         blend->SetOpacity(1, 0.5);
+
+        transform = vtkSmartPointer<vtkTransform>::New();
+        transform->PostMultiply();
     }
 
-    bool load_fixed(const std::string &dir) {
-        auto reader_ = vtkSmartPointer<vtkDICOMImageReader>::New();
-        reader_->SetDirectoryName(dir.c_str());
-        reader_->Update();
-        fixed_reader = reader_;
-        wire_blend();
-        sync_reslice();
-        return true;
+    void set_fixed(vtkImageData* img) {
+        fixed = img;
+        _wire_blend();
+        _sync_reslice_output();
     }
 
-    bool load_moving(const std::string &dir) {
-        auto reader_ = vtkSmartPointer<vtkDICOMImageReader>::New();
-        reader_->SetDirectoryName(dir.c_str());
-        reader_->Update();
-        moving_reader = reader_;
-        reslice->SetInputConnection(reader_->GetOutputPort());
-        apply_transform();
-        wire_blend();
-        sync_reslice();
-        return true;
+    void set_moving(vtkImageData* img) {
+        moving = img;
+        reslice->SetInputData(moving);
+        _apply_transform();
+        _wire_blend();
+        _sync_reslice_output();
     }
 
-    void set_translation(double tx_, double ty_, double tz_) {
-        tx = tx_; ty = ty_; tz = tz_;
-        apply_transform();
-    }
-
-    void set_rotation(double rx_, double ry_, double rz_) {
-        rx = rx_; ry = ry_; rz = rz_;
-        apply_transform();
-    }
-
-    void set_opacity(double alpha) {
-        blend->SetOpacity(1, std::clamp(alpha,0.0,1.0));
-        blend->Modified();
-    }
-
-    void reset_transform() {
-        tx = ty = tz = rx = ry = rz = 0.0;
-        transform->Identity();
-        apply_transform();
-    }
-
-    py::array_t<uint8_t> get_slice(const std::string &orientation_str, int slice_idx) {
-        if (!fixed_reader) return py::array_t<uint8_t>();
-
-        blend->Modified();
-        blend->Update();
-
-        vtkImageData *img = blend->GetOutput();
-        int ext[6]; img->GetExtent(ext);
-        int nx = ext[1]-ext[0]+1;
-        int ny = ext[3]-ext[2]+1;
-        int nz = ext[5]-ext[4]+1;
-
-        auto scalars = img->GetPointData()->GetScalars();
-        if (!scalars) return py::array_t<uint8_t>();
-
-        py::ssize_t width=0, height=0;
-        std::vector<uint8_t> buffer;
-
-        if (orientation_str=="axial") {
-            width = nx; height = ny;
-            buffer.resize(width*height);
-            int z = std::clamp(slice_idx - ext[4], 0, nz-1);
-            for(int i=0;i<height;i++)
-                for(int j=0;j<width;j++)
-                    buffer[(height-1-i)*width + j] = scalars->GetComponent(z*ny*nx + i*nx + j,0);
-        }
-        else if (orientation_str=="coronal") {
-            width = nx; height = nz;
-            buffer.resize(width*height);
-            int y = std::clamp(slice_idx - ext[2], 0, ny-1);
-            for(int i=0;i<height;i++)
-                for(int j=0;j<width;j++)
-                    buffer[(height-1-i)*width + j] = scalars->GetComponent(i*ny*nx + y*nx + j,0);
-        }
-        else if (orientation_str=="sagittal") {
-            width = ny; height = nz;
-            buffer.resize(width*height);
-            int x = std::clamp(slice_idx - ext[0], 0, nx-1);
-            for(int i=0;i<height;i++)
-                for(int j=0;j<width;j++)
-                    buffer[(height-1-i)*width + (width-1-j)] = scalars->GetComponent(i*ny*nx + j*nx + x,0);
-        }
-        else return py::array_t<uint8_t>();
-
-        return py::array_t<uint8_t>({height,width}, buffer.data());
-    }
-
-private:
-    vtkSmartPointer<vtkDICOMImageReader> fixed_reader=nullptr;
-    vtkSmartPointer<vtkDICOMImageReader> moving_reader=nullptr;
-    vtkSmartPointer<vtkImageReslice> reslice=vtkSmartPointer<vtkImageReslice>::New();
-    vtkSmartPointer<vtkImageBlend> blend=vtkSmartPointer<vtkImageBlend>::New();
-    vtkSmartPointer<vtkTransform> transform=vtkSmartPointer<vtkTransform>::New();
-
-    double tx=0, ty=0, tz=0;
-    double rx=0, ry=0, rz=0;
-
-    void apply_transform() {
-        if (!fixed_reader || !moving_reader) return;
-
+    void set_transform(double tx, double ty, double tz,
+                       double rx, double ry, double rz) {
+        if (!fixed || !moving) return;
         double center[3];
-        fixed_reader->GetOutput()->GetCenter(center);
+        fixed->GetCenter(center);
 
         vtkSmartPointer<vtkTransform> t = vtkSmartPointer<vtkTransform>::New();
         t->PostMultiply();
         t->Translate(-center[0], -center[1], -center[2]);
-        t->RotateX(rx); t->RotateY(ry); t->RotateZ(rz);
-        t->Translate(center[0]+tx, center[1]+ty, center[2]+tz);
+        t->RotateX(rx);
+        t->RotateY(ry);
+        t->RotateZ(rz);
+        t->Translate(center[0], center[1], center[2]);
+        t->Translate(tx, ty, tz);
 
         transform->DeepCopy(t);
+        _apply_transform();
+    }
+
+    void set_opacity(double alpha) {
+        blend->SetOpacity(1, alpha);
+    }
+
+    py::array_t<uint8_t> get_slice(const std::string& orientation, int slice_idx) {
+        blend->Update();
+        vtkImageData* img = blend->GetOutput();
+        int extent[6];
+        img->GetExtent(extent);
+        int nx = extent[1]-extent[0]+1;
+        int ny = extent[3]-extent[2]+1;
+        int nz = extent[5]-extent[4]+1;
+
+        uint8_t* out_ptr = new uint8_t[nx*ny]; // max size, will slice later
+        int w,h;
+        if (orientation == "axial") {
+            int z = std::max(0, std::min(slice_idx - extent[4], nz-1));
+            for(int j=0;j<ny;j++){
+                for(int i=0;i<nx;i++){
+                    double* pixel = static_cast<double*>(img->GetScalarPointer(i,j,z));
+                    out_ptr[j*nx+i] = static_cast<uint8_t>(*pixel);
+                }
+            }
+            w = nx; h = ny;
+        } else if (orientation == "coronal") {
+            int y = std::max(0,std::min(slice_idx - extent[2], ny-1));
+            for(int k=0;k<nz;k++){
+                for(int i=0;i<nx;i++){
+                    double* pixel = static_cast<double*>(img->GetScalarPointer(i,y,k));
+                    out_ptr[k*nx+i] = static_cast<uint8_t>(*pixel);
+                }
+            }
+            w = nx; h = nz;
+        } else if (orientation == "sagittal") {
+            int x = std::max(0,std::min(slice_idx - extent[0], nx-1));
+            for(int k=0;k<nz;k++){
+                for(int j=0;j<ny;j++){
+                    double* pixel = static_cast<double*>(img->GetScalarPointer(x,j,k));
+                    out_ptr[k*ny+j] = static_cast<uint8_t>(*pixel);
+                }
+            }
+            w = ny; h = nz;
+        } else {
+            delete[] out_ptr;
+            return py::array_t<uint8_t>();
+        }
+
+        auto result = py::array_t<uint8_t>({h,w}, out_ptr);
+        return result;
+    }
+
+private:
+    vtkSmartPointer<vtkImageReslice> reslice;
+    vtkSmartPointer<vtkImageBlend> blend;
+    vtkSmartPointer<vtkTransform> transform;
+    vtkImageData* fixed = nullptr;
+    vtkImageData* moving = nullptr;
+
+    void _apply_transform() {
+        if (!fixed || !moving) return;
         reslice->SetResliceAxes(transform->GetMatrix());
         reslice->Modified();
     }
 
-    void wire_blend() {
+    void _wire_blend() {
         blend->RemoveAllInputs();
-        if(fixed_reader) blend->AddInputConnection(fixed_reader->GetOutputPort());
-        if(moving_reader) blend->AddInputConnection(reslice->GetOutputPort());
-        blend->Modified();
+        if (fixed) blend->AddInputData(fixed);
+        if (moving) blend->AddInputConnection(reslice->GetOutputPort());
     }
 
-    void sync_reslice() {
-        if(!fixed_reader) return;
-        vtkImageData* img = fixed_reader->GetOutput();
-        reslice->SetOutputSpacing(img->GetSpacing());
-        reslice->SetOutputOrigin(img->GetOrigin());
-        reslice->SetOutputExtent(img->GetExtent());
+    void _sync_reslice_output() {
+        if (!fixed) return;
+        double sp[3]; fixed->GetSpacing(sp);
+        double org[3]; fixed->GetOrigin(org);
+        int ext[6]; fixed->GetExtent(ext);
+        reslice->SetOutputSpacing(sp);
+        reslice->SetOutputOrigin(org);
+        reslice->SetOutputExtent(ext);
         reslice->Modified();
     }
 };
 
-PYBIND11_MODULE(vtk_engine, m) {
-    py::class_<VTKEngine>(m, "VTKEngine")
+PYBIND11_MODULE(vtk_slice_backend, m) {
+    py::class_<VTKSliceExtractor>(m, "VTKSliceExtractor")
         .def(py::init<>())
-        .def("load_fixed",&VTKEngine::load_fixed)
-        .def("load_moving",&VTKEngine::load_moving)
-        .def("set_translation",&VTKEngine::set_translation)
-        .def("set_rotation",&VTKEngine::set_rotation)
-        .def("set_opacity",&VTKEngine::set_opacity)
-        .def("reset_transform",&VTKEngine::reset_transform)
-        .def("get_slice",&VTKEngine::get_slice);
+        .def("set_fixed", &VTKSliceExtractor::set_fixed)
+        .def("set_moving", &VTKSliceExtractor::set_moving)
+        .def("set_transform", &VTKSliceExtractor::set_transform)
+        .def("set_opacity", &VTKSliceExtractor::set_opacity)
+        .def("get_slice", &VTKSliceExtractor::get_slice);
 }
