@@ -85,9 +85,9 @@ class VTKEngine:
         self._tx, self._ty, self._tz = float(tx), float(ty), float(tz)
         self._apply_transform()
 
-    def set_rotation_deg(self, rx: float, ry: float, rz: float, orientation=None, slice_idx=None):
+    def set_rotation_deg(self, rx: float, ry: float, rz: float):
         self._rx, self._ry, self._rz = float(rx), float(ry), float(rz)
-        self._apply_transform(orientation, slice_idx)
+        self._apply_transform()
 
     def reset_transform(self):
         self._tx = self._ty = self._tz = 0.0
@@ -284,38 +284,11 @@ class VTKEngine:
         return qimg
 
     # -------- Internals --------
-    def _apply_transform(self, orientation=None, slice_idx=None):
+    def _apply_transform(self):
         if not self.fixed_reader or not self.moving_reader:
             return
         img = self.fixed_reader.GetOutput()
         center = np.array(img.GetCenter())
-
-        # If orientation and slice_idx are provided, compute the slice center
-        if orientation is not None and slice_idx is not None:
-            extent = img.GetExtent()
-            spacing = img.GetSpacing()
-            origin = img.GetOrigin()
-            if orientation == VTKEngine.ORI_AXIAL:
-                z = int(np.clip(slice_idx, extent[4], extent[5]))
-                center = np.array([
-                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
-                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
-                    origin[2] + z * spacing[2]
-                ])
-            elif orientation == VTKEngine.ORI_CORONAL:
-                y = int(np.clip(slice_idx, extent[2], extent[3]))
-                center = np.array([
-                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
-                    origin[1] + y * spacing[1],
-                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
-                ])
-            elif orientation == VTKEngine.ORI_SAGITTAL:
-                x = int(np.clip(slice_idx, extent[0], extent[1]))
-                center = np.array([
-                    origin[0] + x * spacing[0],
-                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
-                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
-                ])
         t = vtk.vtkTransform()
         t.PostMultiply()
         t.Translate(-center)
@@ -570,30 +543,11 @@ class Controller(QtCore.QObject):
         self.ui.coloring_checkbox.stateChanged.connect(self._on_coloring_checkbox_changed)
 
     def _update_transform(self):
-        # Determine which orientation and slice to use for rotation center
-        # Priority: axial, then coronal, then sagittal (could be improved to use the last interacted)
-        orientation = None
-        slice_idx = None
-        if self.ui.s_axial.hasFocus():
-            orientation = VTKEngine.ORI_AXIAL
-            slice_idx = self.ui.s_axial.value()
-        elif self.ui.s_coronal.hasFocus():
-            orientation = VTKEngine.ORI_CORONAL
-            slice_idx = self.ui.s_coronal.value()
-        elif self.ui.s_sagittal.hasFocus():
-            orientation = VTKEngine.ORI_SAGITTAL
-            slice_idx = self.ui.s_sagittal.value()
-        else:
-            # Default to axial if none focused
-            orientation = VTKEngine.ORI_AXIAL
-            slice_idx = self.ui.s_axial.value()
-
         self.engine.set_translation(
             self.ui.s_tx.value(), self.ui.s_ty.value(), self.ui.s_tz.value()
         )
         self.engine.set_rotation_deg(
-            self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0,
-            orientation=orientation, slice_idx=slice_idx
+            self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0
         )
         self.engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
