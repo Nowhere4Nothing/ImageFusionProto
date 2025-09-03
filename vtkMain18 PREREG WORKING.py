@@ -316,48 +316,56 @@ class VTKEngine:
             return
 
         img = self.fixed_reader.GetOutput()
-        spacing = np.array(img.GetSpacing())
-        origin = np.array(img.GetOrigin())
-        extent = img.GetExtent()
+        center = np.array(img.GetCenter())
+        
+        # Compute slice center if orientation/slice_idx are provided
+        if orientation is not None and slice_idx is not None:
+            extent = img.GetExtent()
+            spacing = img.GetSpacing()
+            origin = img.GetOrigin()
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([origin[0] + 0.5*(extent[0]+extent[1])*spacing[0],
+                                origin[1] + 0.5*(extent[2]+extent[3])*spacing[1],
+                                origin[2] + z*spacing[2]])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([origin[0] + 0.5*(extent[0]+extent[1])*spacing[0],
+                                origin[1] + y*spacing[1],
+                                origin[2] + 0.5*(extent[4]+extent[5])*spacing[2]])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([origin[0] + x*spacing[0],
+                                origin[1] + 0.5*(extent[2]+extent[3])*spacing[1],
+                                origin[2] + 0.5*(extent[4]+extent[5])*spacing[2]])
 
-        center_voxel = np.array([
-            0.5 * (extent[0] + extent[1]),
-            0.5 * (extent[2] + extent[3]),
-            0.5 * (extent[4] + extent[5])
-        ])
-        center_world = origin + center_voxel * spacing
-
-        # ---------------- User transform only ----------------
+        # --- User transform only ---
         user_t = vtk.vtkTransform()
         user_t.PostMultiply()
-        user_t.Translate(-center_world)
+        user_t.Translate(-center)
         user_t.RotateX(self._rx)
         user_t.RotateY(self._ry)
         user_t.RotateZ(self._rz)
-        user_t.Translate(center_world)
+        user_t.Translate(center)
         user_t.Translate(self._tx, self._ty, self._tz)
 
-        # Save **just the user transform** for GUI
+        # Save for GUI display
         self.user_transform.DeepCopy(user_t)
 
-        # ---------------- Combined transform for reslice ----------------
+        # --- Combine pre-registration + user transform for slicing ---
         final_t = vtk.vtkTransform()
         final_t.PostMultiply()
         pre_vtk_mat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
                 pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
-
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration
-        final_t.Concatenate(user_t)       # user transform
+        final_t.Concatenate(pre_vtk_mat)
+        final_t.Concatenate(user_t)
 
         self.transform.DeepCopy(final_t)
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
         self.reslice3d.Modified()
         self._blend_dirty = True
-
-
-
 
 
     # ---------------- Pipeline Utilities ----------------
@@ -636,21 +644,19 @@ class Controller(QtCore.QObject):
             orientation = VTKEngine.ORI_AXIAL
             slice_idx = self.ui.s_axial.value()
 
-        self.engine._tx = self.ui.s_tx.value()
-        self.engine._ty = self.ui.s_ty.value()
-        self.engine._tz = self.ui.s_tz.value()
-        self.engine._rx = self.ui.s_rx.value() / 10.0
-        self.engine._ry = self.ui.s_ry.value() / 10.0
-        self.engine._rz = self.ui.s_rz.value() / 10.0
-
-        self.engine._apply_transform(orientation, slice_idx)
-
+        self.engine.set_translation(
+            self.ui.s_tx.value(), self.ui.s_ty.value(), self.ui.s_tz.value()
+        )
+        self.engine.set_rotation_deg(
+            self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0,
+            orientation=orientation, slice_idx=slice_idx
+        )
         self.engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
         # update matrix dialog if open
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _update_opacity(self, a: float):
         self.engine.set_opacity(a)
@@ -680,7 +686,7 @@ class Controller(QtCore.QObject):
         self.ui.s_tz.setValue(0)
 
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _sync_slice_ranges(self):
         ext = self.engine.fixed_extent()

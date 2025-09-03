@@ -1,46 +1,10 @@
 from __future__ import annotations
-import sys, os
+import sys
 from pathlib import Path
 import numpy as np
 from PySide6 import QtCore, QtWidgets, QtGui
 import vtk
 from vtkmodules.util import numpy_support
-import pydicom
-
-# ------------------------------ DICOM Utilities ------------------------------
-
-def get_first_slice_ipp(folder):
-    """Return the ImagePositionPatient of the first slice in the folder."""
-    # Get all DICOM files
-    files = sorted([os.path.join(folder,f) for f in os.listdir(folder) if f.lower().endswith(".dcm")])
-    if not files:
-        return np.array([0.0,0.0,0.0])
-    ds = pydicom.dcmread(files[0])
-    return np.array(ds.ImagePositionPatient, dtype=float)
-
-def compute_dicom_matrix(reader, origin_override=None):
-    """Return a 4x4 voxel-to-world matrix for vtkDICOMImageReader."""
-    image = reader.GetOutput()
-
-    origin = np.array(image.GetOrigin())
-    if origin_override is not None:
-        origin = origin_override  # override with true DICOM IPP
-
-    spacing = np.array(image.GetSpacing())
-
-    # Direction cosines (IOP)
-    direction_matrix = image.GetDirectionMatrix()
-    direction = np.eye(3)
-    if direction_matrix:  # VTK >=9
-        for i in range(3):
-            for j in range(3):
-                direction[i,j] = direction_matrix.GetElement(i,j)
-
-    M = np.eye(4)
-    for i in range(3):
-        M[0:3,i] = direction[0:3,i] * spacing[i]
-    M[0:3,3] = origin
-    return M
 
 # ------------------------------ VTK Processing Engine ------------------------------
 
@@ -53,6 +17,8 @@ class VTKEngine:
         self.fixed_reader = None
         self.moving_reader = None
         self._blend_dirty = True
+        self._initial_offset = np.zeros(3, dtype=np.float64)
+
 
         # Transform parameters
         self._tx = self._ty = self._tz = 0.0
@@ -79,37 +45,51 @@ class VTKEngine:
         self.vtk_image_actor = vtk.vtkImageActor()
         self.renderer.AddActor(self.vtk_image_actor)
 
-        # Pre-registration transform
-        self.pre_transform = np.eye(4)
-        self.fixed_matrix = np.eye(4)
-        self.moving_matrix = np.eye(4)
-        
-        # User transform (rotation + translation applied by user)
-        self.user_transform = vtk.vtkTransform()
-        self.user_transform.Identity()
+    # ---------------- NEW FUNCTION ----------------
+    def _align_moving_to_fixed(self):
+        """Sets the initial translation so that moving volume matches fixed volume in patient space"""
+        if not self.fixed_reader or not self.moving_reader:
+            return
 
-    # ---------------- Fixed Volume ----------------
+        fixed_img = self.fixed_reader.GetOutput()
+        moving_img = self.moving_reader.GetOutput()
+
+        # Get origins in LPS (DICOM coordinates)
+        fixed_origin = np.array(fixed_img.GetOrigin())
+        moving_origin = np.array(moving_img.GetOrigin())
+
+        # Translation to align moving to fixed
+        offset = fixed_origin - moving_origin
+        self._initial_offset = offset
+
+        # Apply translation as starting point
+        self.set_translation(offset[0], offset[1], offset[2])
+        print("Initial alignment translation (LPS mm):", offset)
+
+
     def load_fixed(self, dicom_dir: str) -> bool:
         files = list(Path(dicom_dir).glob("*"))
         if not any(f.is_file() for f in files):
             return False
-        r = vtk.vtkDICOMImageReader()
-        r.SetDirectoryName(str(Path(dicom_dir)))
-        r.Update()
 
-        # --- Apply flip to correct orientation ---
+        reader = vtk.vtkDICOMImageReader()
+        reader.SetDirectoryName(str(Path(dicom_dir)))
+        reader.Update()
+
+        # --- Correct orientation (flip along Y / sagittal) ---
         flip = vtk.vtkImageFlip()
-        flip.SetInputConnection(r.GetOutputPort())
-        flip.SetFilteredAxis(1)
+        flip.SetInputConnection(reader.GetOutputPort())
+        flip.SetFilteredAxis(1)  # flip along Y
         flip.Update()
+
+        # --- Set origin to patient-space coordinates from DICOM ---
+        # Using the reader’s first slice Image Position Patient (LPS)
+        ipp = np.array(reader.GetImagePositionPatient())  # this is in LPS already
+        flip.GetOutput().SetOrigin(ipp)
 
         self.fixed_reader = flip
 
-        # --- Compute DICOM matrix for pre-registration ---
-        origin = get_first_slice_ipp(dicom_dir)
-        self.fixed_matrix = compute_dicom_matrix(r, origin_override=origin)
-
-        # --- Set background level to lowest pixel value in fixed DICOM ---
+        # --- Set background level to lowest pixel value ---
         img = flip.GetOutput()
         scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
         if scalars is not None and scalars.size > 0:
@@ -120,49 +100,45 @@ class VTKEngine:
         self._sync_reslice_output_to_fixed()
         return True
 
-    # ---------------- Moving Volume ----------------
+
     def load_moving(self, dicom_dir: str) -> bool:
         files = list(Path(dicom_dir).glob("*"))
         if not any(f.is_file() for f in files):
             return False
 
-        r = vtk.vtkDICOMImageReader()
-        r.SetDirectoryName(str(Path(dicom_dir)))
-        r.Update()
+        reader = vtk.vtkDICOMImageReader()
+        reader.SetDirectoryName(str(Path(dicom_dir)))
+        reader.Update()
 
-        # --- Apply flip to correct orientation ---
+        # --- Correct orientation (flip along Y / sagittal) ---
         flip = vtk.vtkImageFlip()
-        flip.SetInputConnection(r.GetOutputPort())
+        flip.SetInputConnection(reader.GetOutputPort())
         flip.SetFilteredAxis(1)
         flip.Update()
+
+        # --- Set origin to patient-space coordinates from DICOM ---
+        ipp = np.array(reader.GetImagePositionPatient())
+        flip.GetOutput().SetOrigin(ipp)
+
         self.moving_reader = flip
-
-        # --- Compute DICOM matrix for pre-registration ---
-        moving_origin = get_first_slice_ipp(dicom_dir)
-        self.moving_matrix = compute_dicom_matrix(r, origin_override=moving_origin)
-
-        # ------------------ Compute pre-registration transform ------------------
-        fixed_to_world = self.fixed_matrix
-        moving_to_world = self.moving_matrix
-        pre_transform = np.linalg.inv(fixed_to_world) @ moving_to_world
-        # Only difference in translation should be applied
-        pre_translation = moving_to_world[0:3, 3] - fixed_to_world[0:3, 3]
-        pre_transform[0:3, 3] = pre_translation
-        self.pre_transform = pre_transform
-
-        # Apply pre-transform in VTK
-        vtkmat = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                vtkmat.SetElement(i, j, self.pre_transform[i, j])
-
         self.reslice3d.SetInputConnection(flip.GetOutputPort())
-        self.reslice3d.SetResliceAxes(vtkmat)
-        self._sync_reslice_output_to_fixed()
+
+        # --- Align moving volume to fixed volume in LPS ---
+        self._align_moving_to_fixed()
+
+        self._apply_transform()
         self._wire_blend()
+        self._sync_reslice_output_to_fixed()
         return True
 
-    # ---------------- Transformation Utilities ----------------
+
+
+
+
+    def set_opacity(self, alpha: float):
+        self.blend.SetOpacity(1, float(np.clip(alpha, 0.0, 1.0)))
+        self._blend_dirty = True
+
     def set_translation(self, tx: float, ty: float, tz: float):
         self._tx, self._ty, self._tz = float(tx), float(ty), float(tz)
         self._apply_transform()
@@ -178,22 +154,24 @@ class VTKEngine:
         self._blend_dirty = True
         self._apply_transform()
 
-    def set_opacity(self, alpha: float):
-        self.blend.SetOpacity(1, float(np.clip(alpha, 0.0, 1.0)))
-        self._blend_dirty = True
-
     def fixed_extent(self):
         if not self.fixed_reader:
             return None
         return self.fixed_reader.GetOutput().GetExtent()
 
-
-    # ---------------- Slice Extraction ----------------
+    # ---------------- NEW FUNCTION ----------------
     def get_slice_numpy(self, orientation: str, slice_idx: int) -> tuple[np.ndarray | None, np.ndarray | None]:
+        """
+        Returns (fixed_slice, moving_slice) as numpy arrays (uint8 2D), both aligned
+        to the fixed volume’s geometry. Each can be None if missing.
+        """
         if self.fixed_reader is None:
             return None, None
+
         fixed_img = self.fixed_reader.GetOutput()
         moving_img = self.reslice3d.GetOutput() if self.moving_reader else None
+
+        # Update reslice if moving present
         if self.moving_reader:
             self.reslice3d.Update()
 
@@ -221,6 +199,7 @@ class VTKEngine:
             else:
                 return None
 
+            # --- Apply CT windowing ---
             arr2d = arr2d.astype(np.float32)
             c = window_center
             w = window_width
@@ -228,17 +207,20 @@ class VTKEngine:
             arr2d = (arr2d * 255.0).astype(np.uint8)
             return np.ascontiguousarray(arr2d)
 
-        fixed_slice = vtk_to_np_slice(fixed_img, orientation, slice_idx)
-        moving_slice = vtk_to_np_slice(moving_img, orientation, slice_idx) if moving_img else None
+        fixed_slice = vtk_to_np_slice(fixed_img, orientation, slice_idx, window_center=40, window_width=400)
+        moving_slice = vtk_to_np_slice(moving_img, orientation, slice_idx, window_center=40, window_width=400) if moving_img else None
         return fixed_slice, moving_slice
 
-    def get_slice_qimage(self, orientation: str, slice_idx: int, fixed_color="Purple", moving_color="Green", coloring_enabled=True) -> QtGui.QImage:
+    # ---------------- REFACTORED OLD FUNCTION ----------------
+    def get_slice_qimage(self, orientation: str, slice_idx: int, fixed_color="Purple", moving_color="Green", coloring_enabled=True) -> tuple[QtGui.QImage, tuple[int,int]]:
         fixed_slice, moving_slice = self.get_slice_numpy(orientation, slice_idx)
         if fixed_slice is None:
             return QtGui.QImage()
+
         h, w = fixed_slice.shape
 
         blend = self.blend.GetOpacity(1) if self.moving_reader is not None else 0.0
+
         color_map = {
             "Grayscale":   lambda arr: arr,
             "Green":       lambda arr: np.stack([np.zeros_like(arr), arr, np.zeros_like(arr)], axis=-1),
@@ -277,7 +259,7 @@ class VTKEngine:
             if moving_slice is None:
                 return grayscale_qimage(fixed_slice, h, w, orientation)
             else:
-                alpha = self.blend.GetOpacity(1)
+                alpha = self.blend.GetOpacity(1) if self.moving_reader is not None else 0.5
                 arr2d = (fixed_slice.astype(np.float32) * (1 - alpha) +
                          moving_slice.astype(np.float32) * alpha).astype(np.uint8)
                 return grayscale_qimage(arr2d, h, w, orientation)
@@ -308,66 +290,88 @@ class VTKEngine:
 
         qimg = QtGui.QImage(rgb.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
         qimg = qimg.copy()
-        return aspect_ratio_correct(qimg, h, w, orientation)
+        qimg = aspect_ratio_correct(qimg, h, w, orientation)
 
-    # ---------------- Internal Transform Application ----------------
+        # Compute scene position in pixels based on LPS origin
+        scene_x, scene_y = 0, 0
+        if self.fixed_reader is not None:
+            origin = self.fixed_reader.GetOutput().GetOrigin()
+            spacing = self.fixed_reader.GetOutput().GetSpacing()
+            if orientation == self.ORI_AXIAL:
+                scene_x = int(origin[0] / spacing[0])
+                scene_y = int(origin[1] / spacing[1])
+            elif orientation == self.ORI_CORONAL:
+                scene_x = int(origin[0] / spacing[0])
+                scene_y = int(origin[2] / spacing[2])
+            elif orientation == self.ORI_SAGITTAL:
+                scene_x = int(origin[1] / spacing[1])
+                scene_y = int(origin[2] / spacing[2])
+
+        return qimg, (scene_x, scene_y)
+
+    # -------- Internals --------
     def _apply_transform(self, orientation=None, slice_idx=None):
         if not self.fixed_reader or not self.moving_reader:
             return
 
         img = self.fixed_reader.GetOutput()
-        spacing = np.array(img.GetSpacing())
-        origin = np.array(img.GetOrigin())
-        extent = img.GetExtent()
+        center = np.array(img.GetCenter())
 
-        center_voxel = np.array([
-            0.5 * (extent[0] + extent[1]),
-            0.5 * (extent[2] + extent[3]),
-            0.5 * (extent[4] + extent[5])
-        ])
-        center_world = origin + center_voxel * spacing
+        # If orientation/slice provided, compute slice center
+        if orientation is not None and slice_idx is not None:
+            extent = img.GetExtent()
+            spacing = img.GetSpacing()
+            origin = img.GetOrigin()
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
 
-        # ---------------- User transform only ----------------
-        user_t = vtk.vtkTransform()
-        user_t.PostMultiply()
-        user_t.Translate(-center_world)
-        user_t.RotateX(self._rx)
-        user_t.RotateY(self._ry)
-        user_t.RotateZ(self._rz)
-        user_t.Translate(center_world)
-        user_t.Translate(self._tx, self._ty, self._tz)
+        t = vtk.vtkTransform()
+        t.PostMultiply()
 
-        # Save **just the user transform** for GUI
-        self.user_transform.DeepCopy(user_t)
+        # Translate to center, apply rotation, translate back
+        t.Translate(-center)
+        t.RotateX(self._rx)
+        t.RotateY(self._ry)
+        t.RotateZ(self._rz)
+        t.Translate(center)
 
-        # ---------------- Combined transform for reslice ----------------
-        final_t = vtk.vtkTransform()
-        final_t.PostMultiply()
-        pre_vtk_mat = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
+        # Add user translation plus initial LPS offset
+        t.Translate(self._tx + self._initial_offset[0],
+                    self._ty + self._initial_offset[1],
+                    self._tz + self._initial_offset[2])
 
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration
-        final_t.Concatenate(user_t)       # user transform
-
-        self.transform.DeepCopy(final_t)
+        self.transform.DeepCopy(t)
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
         self.reslice3d.Modified()
         self._blend_dirty = True
 
 
-
-
-
-    # ---------------- Pipeline Utilities ----------------
     def _wire_blend(self):
         self.blend.RemoveAllInputs()
         if self.fixed_reader is not None:
             self.blend.AddInputConnection(self.fixed_reader.GetOutputPort())
         if self.moving_reader is not None:
             self.blend.AddInputConnection(self.reslice3d.GetOutputPort())
-        self._blend_dirty = True
+        self._blend_dirty = True 
 
     def _sync_reslice_output_to_fixed(self):
         if self.fixed_reader is None:
@@ -383,7 +387,6 @@ class VTKEngine:
             self.reslice3d.SetInterpolationModeToLinear()
         else:
             self.reslice3d.SetInterpolationModeToNearestNeighbor()
-
 
 # ------------------------------ Transform Matrix Dialog ------------------------------
 
@@ -434,10 +437,12 @@ class SliceGraphicsView(QtWidgets.QGraphicsView):
         self.pixmap_item = QtWidgets.QGraphicsPixmapItem()
         self.scene.addItem(self.pixmap_item)
 
-    def set_slice_qimage(self, qimg: QtGui.QImage):
+    def set_slice_qimage(self, qimg: QtGui.QImage, offset: tuple[int,int]=(0,0)):
         pix = QtGui.QPixmap.fromImage(qimg)
         self.pixmap_item.setPixmap(pix)
+        self.pixmap_item.setPos(*offset)
         self.fitInView(self.pixmap_item, QtCore.Qt.KeepAspectRatio)
+
 
 # ------------------------------ Qt UI ------------------------------
 
@@ -579,7 +584,7 @@ class FusionUI(QtWidgets.QWidget):
         if engine is None and "engine" in globals():
             engine = globals()["engine"]
         if engine is not None:
-            self._matrix_dialog.set_matrix(engine.user_transform)
+            self._matrix_dialog.set_matrix(engine.transform)
         self._matrix_dialog.show()
         self._matrix_dialog.raise_()
         self._matrix_dialog.activateWindow()
@@ -636,21 +641,19 @@ class Controller(QtCore.QObject):
             orientation = VTKEngine.ORI_AXIAL
             slice_idx = self.ui.s_axial.value()
 
-        self.engine._tx = self.ui.s_tx.value()
-        self.engine._ty = self.ui.s_ty.value()
-        self.engine._tz = self.ui.s_tz.value()
-        self.engine._rx = self.ui.s_rx.value() / 10.0
-        self.engine._ry = self.ui.s_ry.value() / 10.0
-        self.engine._rz = self.ui.s_rz.value() / 10.0
-
-        self.engine._apply_transform(orientation, slice_idx)
-
+        self.engine.set_translation(
+            self.ui.s_tx.value(), self.ui.s_ty.value(), self.ui.s_tz.value()
+        )
+        self.engine.set_rotation_deg(
+            self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0,
+            orientation=orientation, slice_idx=slice_idx
+        )
         self.engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
         # update matrix dialog if open
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _update_opacity(self, a: float):
         self.engine.set_opacity(a)
@@ -680,7 +683,7 @@ class Controller(QtCore.QObject):
         self.ui.s_tz.setValue(0)
 
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _sync_slice_ranges(self):
         ext = self.engine.fixed_extent()
@@ -698,18 +701,19 @@ class Controller(QtCore.QObject):
         self.refresh_slice("sagittal",self.ui.s_sagittal.value())
 
     def refresh_slice(self, orientation:str, idx:int):
-        qimg = self.engine.get_slice_qimage(
+        qimg, offset = self.engine.get_slice_qimage(
             orientation, idx,
             fixed_color=self.fixed_color,
             moving_color=self.moving_color,
             coloring_enabled=self.coloring_enabled
         )
         if orientation=="axial":
-            self.ui.viewer_ax.set_slice_qimage(qimg)
+            self.ui.viewer_ax.set_slice_qimage(qimg, offset)
         elif orientation=="coronal":
-            self.ui.viewer_co.set_slice_qimage(qimg)
+            self.ui.viewer_co.set_slice_qimage(qimg, offset)
         elif orientation=="sagittal":
-            self.ui.viewer_sa.set_slice_qimage(qimg)
+            self.ui.viewer_sa.set_slice_qimage(qimg, offset)
+
 
     def _on_coloring_checkbox_changed(self, state):
         self.coloring_enabled = bool(state)

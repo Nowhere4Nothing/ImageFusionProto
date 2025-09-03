@@ -8,7 +8,6 @@ from vtkmodules.util import numpy_support
 import pydicom
 
 # ------------------------------ DICOM Utilities ------------------------------
-
 def get_first_slice_ipp(folder):
     """Return the ImagePositionPatient of the first slice in the folder."""
     # Get all DICOM files
@@ -80,13 +79,9 @@ class VTKEngine:
         self.renderer.AddActor(self.vtk_image_actor)
 
         # Pre-registration transform
-        self.pre_transform = np.eye(4)
+        self.pre_transform = np.eye(4)  # identity by default
         self.fixed_matrix = np.eye(4)
         self.moving_matrix = np.eye(4)
-        
-        # User transform (rotation + translation applied by user)
-        self.user_transform = vtk.vtkTransform()
-        self.user_transform.Identity()
 
     # ---------------- Fixed Volume ----------------
     def load_fixed(self, dicom_dir: str) -> bool:
@@ -100,7 +95,7 @@ class VTKEngine:
         # --- Apply flip to correct orientation ---
         flip = vtk.vtkImageFlip()
         flip.SetInputConnection(r.GetOutputPort())
-        flip.SetFilteredAxis(1)
+        flip.SetFilteredAxis(1)  # flip along Y (sagittal/front-back)
         flip.Update()
 
         self.fixed_reader = flip
@@ -144,20 +139,28 @@ class VTKEngine:
         # ------------------ Compute pre-registration transform ------------------
         fixed_to_world = self.fixed_matrix
         moving_to_world = self.moving_matrix
+
+        # Pre-transform in fixed voxel space
         pre_transform = np.linalg.inv(fixed_to_world) @ moving_to_world
-        # Only difference in translation should be applied
         pre_translation = moving_to_world[0:3, 3] - fixed_to_world[0:3, 3]
         pre_transform[0:3, 3] = pre_translation
         self.pre_transform = pre_transform
 
-        # Apply pre-transform in VTK
+        print("Fixed->World:\n", fixed_to_world)
+        print("Moving->World:\n", moving_to_world)
+        print("Pre-transform matrix (Fixed^-1 * Moving):\n", pre_transform)
+        print("Pre-translation (x, y, z):", pre_translation)
+
+        # ------------------ Apply pre-transform in VTK ------------------
         vtkmat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
-                vtkmat.SetElement(i, j, self.pre_transform[i, j])
+                vtkmat.SetElement(i, j, pre_transform[i, j])
 
         self.reslice3d.SetInputConnection(flip.GetOutputPort())
         self.reslice3d.SetResliceAxes(vtkmat)
+
+        # Ensure output matches fixed
         self._sync_reslice_output_to_fixed()
         self._wire_blend()
         return True
@@ -316,49 +319,57 @@ class VTKEngine:
             return
 
         img = self.fixed_reader.GetOutput()
-        spacing = np.array(img.GetSpacing())
-        origin = np.array(img.GetOrigin())
-        extent = img.GetExtent()
+        center = np.array(img.GetCenter())
 
-        center_voxel = np.array([
-            0.5 * (extent[0] + extent[1]),
-            0.5 * (extent[2] + extent[3]),
-            0.5 * (extent[4] + extent[5])
-        ])
-        center_world = origin + center_voxel * spacing
+        # If orientation and slice_idx are provided, compute the slice center
+        if orientation is not None and slice_idx is not None:
+            extent = img.GetExtent()
+            spacing = img.GetSpacing()
+            origin = img.GetOrigin()
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
 
-        # ---------------- User transform only ----------------
-        user_t = vtk.vtkTransform()
-        user_t.PostMultiply()
-        user_t.Translate(-center_world)
-        user_t.RotateX(self._rx)
-        user_t.RotateY(self._ry)
-        user_t.RotateZ(self._rz)
-        user_t.Translate(center_world)
-        user_t.Translate(self._tx, self._ty, self._tz)
+        t = vtk.vtkTransform()
+        t.PostMultiply()
 
-        # Save **just the user transform** for GUI
-        self.user_transform.DeepCopy(user_t)
-
-        # ---------------- Combined transform for reslice ----------------
-        final_t = vtk.vtkTransform()
-        final_t.PostMultiply()
+        # Apply pre-registration transform first
         pre_vtk_mat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
                 pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
+        t.Concatenate(pre_vtk_mat)
 
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration
-        final_t.Concatenate(user_t)       # user transform
+        # Apply user-defined translation and rotation
+        t.Translate(-center)
+        t.RotateX(self._rx)
+        t.RotateY(self._ry)
+        t.RotateZ(self._rz)
+        t.Translate(center)
+        t.Translate(self._tx, self._ty, self._tz)
 
-        self.transform.DeepCopy(final_t)
+        self.transform.DeepCopy(t)
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
         self.reslice3d.Modified()
         self._blend_dirty = True
-
-
-
-
 
     # ---------------- Pipeline Utilities ----------------
     def _wire_blend(self):
@@ -579,7 +590,7 @@ class FusionUI(QtWidgets.QWidget):
         if engine is None and "engine" in globals():
             engine = globals()["engine"]
         if engine is not None:
-            self._matrix_dialog.set_matrix(engine.user_transform)
+            self._matrix_dialog.set_matrix(engine.transform)
         self._matrix_dialog.show()
         self._matrix_dialog.raise_()
         self._matrix_dialog.activateWindow()
@@ -636,21 +647,19 @@ class Controller(QtCore.QObject):
             orientation = VTKEngine.ORI_AXIAL
             slice_idx = self.ui.s_axial.value()
 
-        self.engine._tx = self.ui.s_tx.value()
-        self.engine._ty = self.ui.s_ty.value()
-        self.engine._tz = self.ui.s_tz.value()
-        self.engine._rx = self.ui.s_rx.value() / 10.0
-        self.engine._ry = self.ui.s_ry.value() / 10.0
-        self.engine._rz = self.ui.s_rz.value() / 10.0
-
-        self.engine._apply_transform(orientation, slice_idx)
-
+        self.engine.set_translation(
+            self.ui.s_tx.value(), self.ui.s_ty.value(), self.ui.s_tz.value()
+        )
+        self.engine.set_rotation_deg(
+            self.ui.s_rx.value()/10.0, self.ui.s_ry.value()/10.0, self.ui.s_rz.value()/10.0,
+            orientation=orientation, slice_idx=slice_idx
+        )
         self.engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
         # update matrix dialog if open
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _update_opacity(self, a: float):
         self.engine.set_opacity(a)
@@ -680,10 +689,10 @@ class Controller(QtCore.QObject):
         self.ui.s_tz.setValue(0)
 
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_matrix(self.engine.transform)
 
     def _sync_slice_ranges(self):
-        ext = self.engine.fixed_extent()
+        ext = self.engine.fixed_extent
         if not ext:
             return
         x0,x1,y0,y1,z0,z1 = ext
