@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets, QtGui
 import vtk
 from vtkmodules.util import numpy_support
 import pydicom
-import tempfile, shutil, atexit, gc, glob
+import tempfile, shutil
 
 # ------------------------------ DICOM Utilities ------------------------------
 
@@ -73,36 +73,7 @@ def prepare_dicom_slice_dir(input_dir: str) -> str:
 
     return temp_dir
 
-LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0, 1.0])
 
-def lps_matrix_to_ras(M: np.ndarray) -> np.ndarray:
-    """Convert a voxel->LPS matrix into voxel->RAS."""
-    return LPS_TO_RAS @ M
-
-def lps_point_to_ras(pt: np.ndarray) -> np.ndarray:
-    """Convert a 3- or 4-vector point from LPS to RAS (returns 3-vector)."""
-    if pt.shape[0] == 3:
-        v = np.array([pt[0], pt[1], pt[2], 1.0], dtype=float)
-    else:
-        v = pt.astype(float)
-    vr = (LPS_TO_RAS @ v)
-    return vr[0:3]
-
-def cleanup_old_dicom_temp_dirs(temp_root=None):
-    """
-    Scan temp folder for old dicom slice dirs and delete them.
-    Windows-safe: ignores folders in use.
-    """
-    if temp_root is None:
-        temp_root = tempfile.gettempdir()
-
-    pattern = os.path.join(temp_root, "dicom_slices_*")
-    for folder in glob.glob(pattern):
-        try:
-            shutil.rmtree(folder)
-            print(f"[CLEANUP] Removed old temp folder: {folder}")
-        except Exception as e:
-            print(f"[WARN] Could not remove {folder}: {e}")
 
 
 
@@ -117,9 +88,6 @@ class VTKEngine:
         self.fixed_reader = None
         self.moving_reader = None
         self._blend_dirty = True
-
-        # Cleanup old temp dirs on startup
-        self.cleanup_old_temp_dirs()
 
         # Transform parameters
         self._tx = self._ty = self._tz = 0.0
@@ -155,31 +123,10 @@ class VTKEngine:
         self.user_transform = vtk.vtkTransform()
         self.user_transform.Identity()
 
-        # Temporary directories created for DICOM slices
-        self._temp_dirs = []
-        atexit.register(self._cleanup_temp_dirs)
-
-    def cleanup_old_temp_dirs(self):
-        cleanup_old_dicom_temp_dirs()
-
-    def _cleanup_temp_dirs(self):
-        """
-        Remove all temporary directories created for DICOM slices. 
-        This method is called automatically at program exit to ensure cleanup of temporary resources.
-        """
-        for d in self._temp_dirs:
-            try:
-                shutil.rmtree(d, ignore_errors=True)
-            except Exception as e:
-                print(f"[WARN] Failed to clean temp dir {d}: {e}")
-        self._temp_dirs.clear()
-
-
     # ---------------- Fixed Volume ----------------
     def load_fixed(self, dicom_dir: str) -> bool:
         try:
             slice_dir = prepare_dicom_slice_dir(dicom_dir)
-            self._temp_dirs.append(slice_dir)  # track temp dir for cleanup
         except ValueError as e:
             print(e)
             return False
@@ -195,16 +142,7 @@ class VTKEngine:
         self.fixed_reader = flip
 
         origin = get_first_slice_ipp(slice_dir)
-        vox2lps = compute_dicom_matrix(r, origin_override=origin)
-        self.fixed_matrix = lps_matrix_to_ras(vox2lps)
-        print("Fixed voxel->RAS matrix:")
-        print(self.fixed_matrix)
-
-        # Safe to delete temp folder AFTER all computations however
-        # VTK still holds onto directory folder, but this will be deleted 
-        # on next run. Only one slice in the folder remains after this.
-        shutil.rmtree(slice_dir, ignore_errors=True)
-        self._temp_dirs.remove(slice_dir)
+        self.fixed_matrix = compute_dicom_matrix(r, origin_override=origin)
 
         img = flip.GetOutput()
         scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
@@ -219,7 +157,6 @@ class VTKEngine:
     def load_moving(self, dicom_dir: str) -> bool:
         try:
             slice_dir = prepare_dicom_slice_dir(dicom_dir)
-            self._temp_dirs.append(slice_dir)  # track temp dir for cleanup
         except ValueError as e:
             print(e)
             return False
@@ -236,16 +173,7 @@ class VTKEngine:
 
         # compute moving matrix like fixed
         origin = get_first_slice_ipp(slice_dir)
-        vox2lps = compute_dicom_matrix(r, origin_override=origin)
-        self.moving_matrix = lps_matrix_to_ras(vox2lps)
-        print("Moving voxel->RAS matrix:")
-        print(self.moving_matrix)
-
-        # Safe to delete temp folder AFTER all computations however
-        # VTK still holds onto directory folder, but this will be deleted 
-        # on next run. Only one slice in the folder remains after this.
-        shutil.rmtree(slice_dir, ignore_errors=True)
-        self._temp_dirs.remove(slice_dir)
+        self.moving_matrix = compute_dicom_matrix(r, origin_override=origin)
 
         # --- Compute pre-registration transform ---
         fixed_to_world = self.fixed_matrix
@@ -450,20 +378,16 @@ class VTKEngine:
             return
 
         img = self.fixed_reader.GetOutput()
+        spacing = np.array(img.GetSpacing())
+        origin = np.array(img.GetOrigin())
         extent = img.GetExtent()
 
-        # Center voxel indices (i,j,k)
         center_voxel = np.array([
             0.5 * (extent[0] + extent[1]),
             0.5 * (extent[2] + extent[3]),
-            0.5 * (extent[4] + extent[5]),
-            1.0
-        ], dtype=float)
-
-        # Use voxel->RAS matrix to compute center in RAS
-        center_world_h = self.fixed_matrix @ center_voxel
-        center_world = center_world_h[0:3]
-
+            0.5 * (extent[4] + extent[5])
+        ])
+        center_world = origin + center_voxel * spacing
 
         # ---------------- User transform only ----------------
         user_t = vtk.vtkTransform()
@@ -511,14 +435,10 @@ class VTKEngine:
         if self.fixed_reader is None:
             return
         fixed = self.fixed_reader.GetOutput()
-        fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
-        fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
-
         self.reslice3d.SetOutputSpacing(fixed.GetSpacing())
-        self.reslice3d.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
+        self.reslice3d.SetOutputOrigin(fixed.GetOrigin())
         self.reslice3d.SetOutputExtent(fixed.GetExtent())
         self.reslice3d.Modified()
-
 
     def set_interpolation_linear(self, linear: bool = True):
         if linear:

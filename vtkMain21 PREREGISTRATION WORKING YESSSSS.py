@@ -6,7 +6,7 @@ from PySide6 import QtCore, QtWidgets, QtGui
 import vtk
 from vtkmodules.util import numpy_support
 import pydicom
-import tempfile, shutil, atexit, gc, glob
+import tempfile, shutil
 
 # ------------------------------ DICOM Utilities ------------------------------
 
@@ -88,23 +88,6 @@ def lps_point_to_ras(pt: np.ndarray) -> np.ndarray:
     vr = (LPS_TO_RAS @ v)
     return vr[0:3]
 
-def cleanup_old_dicom_temp_dirs(temp_root=None):
-    """
-    Scan temp folder for old dicom slice dirs and delete them.
-    Windows-safe: ignores folders in use.
-    """
-    if temp_root is None:
-        temp_root = tempfile.gettempdir()
-
-    pattern = os.path.join(temp_root, "dicom_slices_*")
-    for folder in glob.glob(pattern):
-        try:
-            shutil.rmtree(folder)
-            print(f"[CLEANUP] Removed old temp folder: {folder}")
-        except Exception as e:
-            print(f"[WARN] Could not remove {folder}: {e}")
-
-
 
 # ------------------------------ VTK Processing Engine ------------------------------
 
@@ -117,9 +100,6 @@ class VTKEngine:
         self.fixed_reader = None
         self.moving_reader = None
         self._blend_dirty = True
-
-        # Cleanup old temp dirs on startup
-        self.cleanup_old_temp_dirs()
 
         # Transform parameters
         self._tx = self._ty = self._tz = 0.0
@@ -155,31 +135,10 @@ class VTKEngine:
         self.user_transform = vtk.vtkTransform()
         self.user_transform.Identity()
 
-        # Temporary directories created for DICOM slices
-        self._temp_dirs = []
-        atexit.register(self._cleanup_temp_dirs)
-
-    def cleanup_old_temp_dirs(self):
-        cleanup_old_dicom_temp_dirs()
-
-    def _cleanup_temp_dirs(self):
-        """
-        Remove all temporary directories created for DICOM slices. 
-        This method is called automatically at program exit to ensure cleanup of temporary resources.
-        """
-        for d in self._temp_dirs:
-            try:
-                shutil.rmtree(d, ignore_errors=True)
-            except Exception as e:
-                print(f"[WARN] Failed to clean temp dir {d}: {e}")
-        self._temp_dirs.clear()
-
-
     # ---------------- Fixed Volume ----------------
     def load_fixed(self, dicom_dir: str) -> bool:
         try:
             slice_dir = prepare_dicom_slice_dir(dicom_dir)
-            self._temp_dirs.append(slice_dir)  # track temp dir for cleanup
         except ValueError as e:
             print(e)
             return False
@@ -200,11 +159,6 @@ class VTKEngine:
         print("Fixed voxel->RAS matrix:")
         print(self.fixed_matrix)
 
-        # Safe to delete temp folder AFTER all computations however
-        # VTK still holds onto directory folder, but this will be deleted 
-        # on next run. Only one slice in the folder remains after this.
-        shutil.rmtree(slice_dir, ignore_errors=True)
-        self._temp_dirs.remove(slice_dir)
 
         img = flip.GetOutput()
         scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
@@ -219,7 +173,6 @@ class VTKEngine:
     def load_moving(self, dicom_dir: str) -> bool:
         try:
             slice_dir = prepare_dicom_slice_dir(dicom_dir)
-            self._temp_dirs.append(slice_dir)  # track temp dir for cleanup
         except ValueError as e:
             print(e)
             return False
@@ -241,11 +194,6 @@ class VTKEngine:
         print("Moving voxel->RAS matrix:")
         print(self.moving_matrix)
 
-        # Safe to delete temp folder AFTER all computations however
-        # VTK still holds onto directory folder, but this will be deleted 
-        # on next run. Only one slice in the folder remains after this.
-        shutil.rmtree(slice_dir, ignore_errors=True)
-        self._temp_dirs.remove(slice_dir)
 
         # --- Compute pre-registration transform ---
         fixed_to_world = self.fixed_matrix
