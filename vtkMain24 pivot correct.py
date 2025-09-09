@@ -441,79 +441,60 @@ class VTKEngine:
         qimg = QtGui.QImage(rgb.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
         qimg = qimg.copy()
         return aspect_ratio_correct(qimg, h, w, orientation)
+    
+    def _debug_pivot_locations(self, pivot_ras):
+        # pivot_ras: numpy 3-vector in RAS
+        pr = np.array([pivot_ras[0], pivot_ras[1], pivot_ras[2], 1.0])
+
+        # pivot in fixed voxel coords (IJK-like)
+        inv_fixed = np.linalg.inv(self.fixed_matrix)
+        pivot_in_fixed_voxel = inv_fixed @ pr
+
+        # pivot in moving voxel coords
+        inv_moving = np.linalg.inv(self.moving_matrix)
+        pivot_in_moving_voxel = inv_moving @ pr
+
+        print("[DBG] pivot_ras:", pivot_ras)
+        print("[DBG] pivot_in_fixed_voxel:", pivot_in_fixed_voxel)
+        print("[DBG] pivot_in_moving_voxel:", pivot_in_moving_voxel)
+
 
     # ---------------- Internal Transform Application ----------------
     def _apply_transform(self, orientation=None, slice_idx=None): 
         if not self.fixed_reader or not self.moving_reader: 
             return 
-
-        # ---------------- User transform applied to pipeline ---------------- 
+        # ---------------- User transform only ---------------- 
         user_t = vtk.vtkTransform() 
         user_t.PostMultiply() 
 
-        # Move volume to origin for rotation
-        user_t.Translate(-self.moving_matrix[0:3,3])
+        # Move volume to origin for rotation 
+        user_t.Translate(-self.moving_matrix[0:3,3]) 
+        # Apply user rotations 
+        user_t.RotateX(self._rx) 
+        user_t.RotateY(self._ry) 
+        user_t.RotateZ(self._rz) 
 
-        # Apply world-based translation first
-        user_t.Translate(self._tx, self._ty, self._tz)
-
-        # Apply rotations
-        user_t.RotateX(-self._rx) 
-        user_t.RotateY(-self._ry) 
-        user_t.RotateZ(-self._rz) 
-
-        # Move volume back
+        # Apply user translation 
+        user_t.Translate(self._tx, self._ty, self._tz) 
+        
+        # Move volume back 
         user_t.Translate(self.moving_matrix[0:3,3]) 
 
         # ---------------- Combined transform for reslice ---------------- 
         final_t = vtk.vtkTransform() 
         final_t.PostMultiply() 
-
         pre_vtk_mat = vtk.vtkMatrix4x4() 
         for i in range(4): 
             for j in range(4): 
                 pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j]) 
 
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration 
-        final_t.Concatenate(user_t)       # user-applied 
+        final_t.Concatenate(pre_vtk_mat) # pre-registration 
+        final_t.Concatenate(user_t) # user transform 
         self.transform.DeepCopy(final_t) 
+        self.user_transform.DeepCopy(user_t) 
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
         self.reslice3d.Modified() 
         self._blend_dirty = True 
-
-        # ---------------- Display-only user_transform ----------------
-        # Extract the pure rotation 3x3 from user_t
-        vtkmat = user_t.GetMatrix()
-        rot3x3 = np.eye(3)
-        for i in range(3):
-            for j in range(3):
-                rot3x3[i, j] = vtkmat.GetElement(i, j)
-
-        # LPS to RAS: flip coordinates for X,Y rotations and negate Z rotation
-        lps_to_ras = np.array([
-            [-1,  0,  0],
-            [ 0, -1,  0],
-            [ 0,  0,  1]
-        ])
-        rot_temp = lps_to_ras @ rot3x3 @ lps_to_ras.T
-
-        # Additionally flip Z rotation by negating specific matrix elements
-        rot_ras = rot_temp.copy()
-        rot_ras[0, 1] = -rot_ras[0, 1]  # Negate sin(z) component
-        rot_ras[1, 0] = -rot_ras[1, 0]  # Negate -sin(z) component
-
-        # Build display matrix
-        display_mat = np.eye(4)
-        display_mat[0:3, 0:3] = rot_ras
-        display_mat[0:3, 3] = np.array([self._tx, self._ty, self._tz])
-
-        vtk_display = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                vtk_display.SetElement(i, j, display_mat[i, j])
-
-        self.user_transform.SetMatrix(vtk_display)
-
 
 
 

@@ -22,11 +22,9 @@ def get_first_slice_ipp(folder):
 def compute_dicom_matrix(reader, origin_override=None):
     """Return a 4x4 voxel-to-world matrix for vtkDICOMImageReader."""
     image = reader.GetOutput()
-
     origin = np.array(image.GetOrigin())
     if origin_override is not None:
         origin = origin_override  # override with true DICOM IPP
-
     spacing = np.array(image.GetSpacing())
 
     # Direction cosines (IOP)
@@ -45,12 +43,12 @@ def compute_dicom_matrix(reader, origin_override=None):
 
 def prepare_dicom_slice_dir(input_dir: str) -> str:
     """
-    Copy only CT/MR slices into a temporary folder. Ignore RTDOSE, RTPLAN, RTSTRUCT.
+    Copy only CT/MR slices into a temporary folder.
+    Ignore RTDOSE, RTPLAN, RTSTRUCT.
     Returns the path to the temporary directory.
     """
     temp_dir = tempfile.mkdtemp(prefix="dicom_slices_")
     found = False
-
     IMAGE_MODALITIES = ["CT", "MR"]  # only volume-capable modalities
 
     for f in Path(input_dir).glob("*"):
@@ -59,11 +57,9 @@ def prepare_dicom_slice_dir(input_dir: str) -> str:
         try:
             ds = pydicom.dcmread(str(f))  # read full DICOM
             modality = getattr(ds, "Modality", "").upper()
-
             if modality in IMAGE_MODALITIES and hasattr(ds, "PixelData"):
                 shutil.copy(str(f), temp_dir)
                 found = True
-
         except (pydicom.errors.InvalidDicomError, Exception):
             continue  # skip non-DICOM or unreadable files
 
@@ -95,7 +91,6 @@ def cleanup_old_dicom_temp_dirs(temp_root=None):
     """
     if temp_root is None:
         temp_root = tempfile.gettempdir()
-
     pattern = os.path.join(temp_root, "dicom_slices_*")
     for folder in glob.glob(pattern):
         try:
@@ -103,8 +98,6 @@ def cleanup_old_dicom_temp_dirs(temp_root=None):
             print(f"[CLEANUP] Removed old temp folder: {folder}")
         except Exception as e:
             print(f"[WARN] Could not remove {folder}: {e}")
-
-
 
 # ------------------------------ VTK Processing Engine ------------------------------
 
@@ -118,7 +111,6 @@ class VTKEngine:
         self.moving_reader = None
         self._blend_dirty = True
         self._pivot_actor = None
-
 
         # Cleanup old temp dirs on startup
         self.cleanup_old_temp_dirs()
@@ -145,6 +137,7 @@ class VTKEngine:
         self.render_window = vtk.vtkRenderWindow()
         self.render_window.SetOffScreenRendering(1)
         self.render_window.AddRenderer(self.renderer)
+
         self.vtk_image_actor = vtk.vtkImageActor()
         self.renderer.AddActor(self.vtk_image_actor)
 
@@ -152,7 +145,7 @@ class VTKEngine:
         self.pre_transform = np.eye(4)
         self.fixed_matrix = np.eye(4)
         self.moving_matrix = np.eye(4)
-        
+
         # User transform (rotation + translation applied by user)
         self.user_transform = vtk.vtkTransform()
         self.user_transform.Identity()
@@ -166,8 +159,9 @@ class VTKEngine:
 
     def _cleanup_temp_dirs(self):
         """
-        Remove all temporary directories created for DICOM slices. 
-        This method is called automatically at program exit to ensure cleanup of temporary resources.
+        Remove all temporary directories created for DICOM slices.
+        This method is called automatically at program exit to ensure
+        cleanup of temporary resources.
         """
         for d in self._temp_dirs:
             try:
@@ -176,8 +170,8 @@ class VTKEngine:
                 print(f"[WARN] Failed to clean temp dir {d}: {e}")
         self._temp_dirs.clear()
 
-
     # ---------------- Fixed Volume ----------------
+
     def load_fixed(self, dicom_dir: str) -> bool:
         try:
             slice_dir = prepare_dicom_slice_dir(dicom_dir)
@@ -200,7 +194,6 @@ class VTKEngine:
         origin = get_first_slice_ipp(slice_dir)
         vox2lps = compute_dicom_matrix(r, origin_override=origin)
         self.fixed_matrix = lps_matrix_to_ras(vox2lps)
-
         print("Fixed voxel->RAS matrix (no flip):")
         print(self.fixed_matrix)
 
@@ -222,8 +215,6 @@ class VTKEngine:
         self._wire_blend()
         self._sync_reslice_output_to_fixed()
         return True
-
-
 
     def load_moving(self, dicom_dir: str) -> bool:
         try:
@@ -247,7 +238,6 @@ class VTKEngine:
         origin = get_first_slice_ipp(slice_dir)
         vox2lps = compute_dicom_matrix(r, origin_override=origin)
         self.moving_matrix = lps_matrix_to_ras(vox2lps)
-
         print("Moving voxel->RAS matrix (no flip):")
         print(self.moving_matrix)
 
@@ -264,7 +254,6 @@ class VTKEngine:
         R_fixed = self.fixed_matrix[0:3,0:3] / np.array([np.linalg.norm(self.fixed_matrix[0:3,i]) for i in range(3)])
         R_moving = self.moving_matrix[0:3,0:3] / np.array([np.linalg.norm(self.moving_matrix[0:3,i]) for i in range(3)])
         R = R_fixed.T @ R_moving
-
         t = self.moving_matrix[0:3,3] - self.fixed_matrix[0:3,3]
 
         pre_transform = np.eye(4)
@@ -286,15 +275,96 @@ class VTKEngine:
         self.reslice3d.SetResliceAxes(vtkmat)
         self._sync_reslice_output_to_fixed()
         self._wire_blend()
-
         return True
 
+    # ---------------- Transform Matrix Computation (NEW) ----------------
 
+    def compute_user_transform_matrix(self, orientation=None, slice_idx=None):
+        """
+        Compute the user-visible 4x4 transform matrix that represents rotation around RAS (0,0,0).
+        This takes the 3x3 rotation matrix from VTK and manually calculates the translation
+        values that would result from rotating around RAS origin instead of the current slice.
+        
+        Returns a 4x4 numpy array representing the transform.
+        """
+        if not self.fixed_reader or not self.moving_reader:
+            return np.eye(4)
+        
+        # Get the 3x3 rotation matrix from VTK's user transform
+        vtk_matrix = self.user_transform.GetMatrix()
+        R = np.zeros((3, 3))
+        for i in range(3):
+            for j in range(3):
+                R[i, j] = vtk_matrix.GetElement(i, j)
+        
+        # Get the current rotation center (where VTK is actually rotating around)
+        img = self.fixed_reader.GetOutput()
+        current_center = np.array(img.GetCenter())
+        
+        # If orientation and slice_idx are provided, compute the slice center
+        if orientation is not None and slice_idx is not None:
+            extent = img.GetExtent()
+            spacing = img.GetSpacing()
+            origin = img.GetOrigin()
+            
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                current_center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                current_center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                current_center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+        
+        # Account for pre-transform translation offset
+        pre_t = self.pre_transform[0:3, 3]
+        spacing = img.GetSpacing()
+        offset_voxels = np.array([pre_t[0] / spacing[0], pre_t[1] / spacing[1], pre_t[2] / spacing[2]])
+        current_center += offset_voxels * spacing
+        
+        # The mathematical relationship:
+        # If we rotate point P around center C by rotation R, the result is: R*(P-C) + C
+        # If we want the same result but rotating around origin O, we need translation T such that:
+        # R*P + T = R*(P-C) + C
+        # Solving for T: T = R*(-C) + C = (I - R)*C
+        # But since we're rotating around RAS origin instead of current center:
+        # T = current_center - R*current_center
+        
+        calculated_translation = current_center - R @ current_center
+        
+        # Add user's manual translation
+        user_translation = np.array([self._tx, self._ty, self._tz])
+        final_translation = calculated_translation + user_translation
+        
+        # Construct the final 4x4 matrix
+        user_matrix = np.eye(4)
+        user_matrix[0:3, 0:3] = R
+        user_matrix[0:3, 3] = final_translation
+        
+        return user_matrix
 
-
-
+    def get_user_transform_matrix(self, orientation=None, slice_idx=None):
+        """
+        Get the corrected user transform matrix for display purposes.
+        This shows what the transform would look like if rotation happened around RAS (0,0,0).
+        """
+        return self.compute_user_transform_matrix(orientation, slice_idx)
 
     # ---------------- Transformation Utilities ----------------
+
     def set_translation(self, tx: float, ty: float, tz: float):
         self._tx, self._ty, self._tz = float(tx), float(ty), float(tz)
         self._apply_transform()
@@ -319,26 +389,31 @@ class VTKEngine:
             return None
         return self.fixed_reader.GetOutput().GetExtent()
 
-
     # ---------------- Slice Extraction ----------------
+
     def get_slice_numpy(self, orientation: str, slice_idx: int) -> tuple[np.ndarray | None, np.ndarray | None]:
         if self.fixed_reader is None:
             return None, None
+
         fixed_img = self.fixed_reader.GetOutput()
         moving_img = self.reslice3d.GetOutput() if self.moving_reader else None
+
         if self.moving_reader:
             self.reslice3d.Update()
 
         def vtk_to_np_slice(img, orientation, slice_idx, window_center=40, window_width=400):
             if img is None or img.GetPointData() is None:
                 return None
+
             extent = img.GetExtent()
             nx = extent[1] - extent[0] + 1
             ny = extent[3] - extent[2] + 1
             nz = extent[5] - extent[4] + 1
+
             scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
             if scalars is None:
                 return None
+
             arr = scalars.reshape((nz, ny, nx))
 
             if orientation == VTKEngine.ORI_AXIAL:
@@ -362,23 +437,25 @@ class VTKEngine:
 
         fixed_slice = vtk_to_np_slice(fixed_img, orientation, slice_idx)
         moving_slice = vtk_to_np_slice(moving_img, orientation, slice_idx) if moving_img else None
+
         return fixed_slice, moving_slice
 
     def get_slice_qimage(self, orientation: str, slice_idx: int, fixed_color="Purple", moving_color="Green", coloring_enabled=True) -> QtGui.QImage:
         fixed_slice, moving_slice = self.get_slice_numpy(orientation, slice_idx)
         if fixed_slice is None:
             return QtGui.QImage()
-        h, w = fixed_slice.shape
 
+        h, w = fixed_slice.shape
         blend = self.blend.GetOpacity(1) if self.moving_reader is not None else 0.0
+
         color_map = {
-            "Grayscale":   lambda arr: arr,
-            "Green":       lambda arr: np.stack([np.zeros_like(arr), arr, np.zeros_like(arr)], axis=-1),
-            "Purple":      lambda arr: np.stack([arr, np.zeros_like(arr), arr], axis=-1),
-            "Blue":        lambda arr: np.stack([np.zeros_like(arr), np.zeros_like(arr), arr], axis=-1),
-            "Yellow":      lambda arr: np.stack([arr, arr, np.zeros_like(arr)], axis=-1),
-            "Red":         lambda arr: np.stack([arr, np.zeros_like(arr), np.zeros_like(arr)], axis=-1),
-            "Cyan":        lambda arr: np.stack([np.zeros_like(arr), arr, arr], axis=-1),
+            "Grayscale": lambda arr: arr,
+            "Green": lambda arr: np.stack([np.zeros_like(arr), arr, np.zeros_like(arr)], axis=-1),
+            "Purple": lambda arr: np.stack([arr, np.zeros_like(arr), arr], axis=-1),
+            "Blue": lambda arr: np.stack([np.zeros_like(arr), np.zeros_like(arr), arr], axis=-1),
+            "Yellow": lambda arr: np.stack([arr, arr, np.zeros_like(arr)], axis=-1),
+            "Red": lambda arr: np.stack([arr, np.zeros_like(arr), np.zeros_like(arr)], axis=-1),
+            "Cyan": lambda arr: np.stack([np.zeros_like(arr), arr, arr], axis=-1),
         }
 
         def aspect_ratio_correct(qimg, h, w, orientation):
@@ -392,9 +469,11 @@ class VTKEngine:
                     spacing_y, spacing_x = spacing[2], spacing[1]
                 else:
                     spacing_y, spacing_x = 1.0, 1.0
+
                 phys_h = h * spacing_y
                 phys_w = w * spacing_x
                 aspect_ratio = phys_w / phys_h if phys_h != 0 else 1.0
+
                 display_h = h
                 display_w = int(round(h * aspect_ratio))
                 return qimg.scaled(display_w, display_h, QtCore.Qt.IgnoreAspectRatio, QtCore.Qt.SmoothTransformation)
@@ -410,11 +489,11 @@ class VTKEngine:
                 return grayscale_qimage(fixed_slice, h, w, orientation)
             else:
                 alpha = self.blend.GetOpacity(1)
-                arr2d = (fixed_slice.astype(np.float32) * (1 - alpha) +
-                         moving_slice.astype(np.float32) * alpha).astype(np.uint8)
+                arr2d = (fixed_slice.astype(np.float32) * (1 - alpha) + moving_slice.astype(np.float32) * alpha).astype(np.uint8)
                 return grayscale_qimage(arr2d, h, w, orientation)
 
         fixed_f = fixed_slice.astype(np.float32)
+
         if moving_slice is None:
             if fixed_color == "Grayscale":
                 return grayscale_qimage(fixed_slice, h, w, orientation)
@@ -422,102 +501,137 @@ class VTKEngine:
                 rgb = np.clip(color_map.get(fixed_color, color_map["Purple"])(fixed_slice), 0, 255).astype(np.uint8)
         else:
             moving_f = moving_slice.astype(np.float32)
+
             if blend <= 0.5:
                 fixed_opacity = 1.0
                 moving_opacity = blend * 2.0
             else:
                 fixed_opacity = 2.0 * (1.0 - blend)
                 moving_opacity = 1.0
+
             if fixed_color == "Grayscale":
                 fixed_rgb = np.stack([np.clip(fixed_opacity * fixed_f, 0, 255).astype(np.uint8)]*3, axis=-1)
             else:
                 fixed_rgb = color_map.get(fixed_color, color_map["Purple"])(np.clip(fixed_opacity * fixed_f, 0, 255).astype(np.uint8))
+
             if moving_color == "Grayscale":
                 moving_rgb = np.stack([np.clip(moving_opacity * moving_f, 0, 255).astype(np.uint8)]*3, axis=-1)
             else:
                 moving_rgb = color_map.get(moving_color, color_map["Green"])(np.clip(moving_opacity * moving_f, 0, 255).astype(np.uint8))
+
             rgb = np.clip(fixed_rgb + moving_rgb, 0, 255).astype(np.uint8)
 
         qimg = QtGui.QImage(rgb.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
         qimg = qimg.copy()
         return aspect_ratio_correct(qimg, h, w, orientation)
 
-    # ---------------- Internal Transform Application ----------------
-    def _apply_transform(self, orientation=None, slice_idx=None): 
-        if not self.fixed_reader or not self.moving_reader: 
-            return 
+    def _debug_pivot_locations(self, pivot_ras):
+        # pivot_ras: numpy 3-vector in RAS
+        pr = np.array([pivot_ras[0], pivot_ras[1], pivot_ras[2], 1.0])
 
-        # ---------------- User transform applied to pipeline ---------------- 
-        user_t = vtk.vtkTransform() 
-        user_t.PostMultiply() 
+        # pivot in fixed voxel coords (IJK-like)
+        inv_fixed = np.linalg.inv(self.fixed_matrix)
+        pivot_in_fixed_voxel = inv_fixed @ pr
+
+        # pivot in moving voxel coords
+        inv_moving = np.linalg.inv(self.moving_matrix)
+        pivot_in_moving_voxel = inv_moving @ pr
+
+        print("[DBG] pivot_ras:", pivot_ras)
+        print("[DBG] pivot_in_fixed_voxel:", pivot_in_fixed_voxel)
+        print("[DBG] pivot_in_moving_voxel:", pivot_in_moving_voxel)
+
+    # ---------------- Internal Transform Application ----------------
+
+    def _apply_transform(self, orientation=None, slice_idx=None):
+        if not self.fixed_reader or not self.moving_reader:
+            return
+
+        img = self.fixed_reader.GetOutput()
+        center = np.array(img.GetCenter())
+
+        # If orientation and slice_idx are provided, compute the slice center
+        if orientation is not None and slice_idx is not None:
+            extent = img.GetExtent()
+            spacing = img.GetSpacing()
+            origin = img.GetOrigin()
+
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+
+            # Offset center by pre-transform translation
+            pre_t = vtk.vtkMatrix4x4()
+            for i in range(4):
+                for j in range(4):
+                    pre_t.SetElement(i, j, self.pre_transform[i, j])
+
+            tx = pre_t.GetElement(0, 3)
+            ty = pre_t.GetElement(1, 3)
+            tz = pre_t.GetElement(2, 3)
+
+            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
+            center += offset_voxels * spacing
+
+            ras_center = -self.moving_matrix[0:3,3]
+
+        # ---------------- User transform only ----------------
+        user_t = vtk.vtkTransform()
+        user_t.PostMultiply()
 
         # Move volume to origin for rotation
-        user_t.Translate(-self.moving_matrix[0:3,3])
+        user_t.Translate(-center)
 
-        # Apply world-based translation first
+        # Apply user rotations
+        user_t.RotateX(self._rx)
+        user_t.RotateY(self._ry)
+        user_t.RotateZ(self._rz)
+
+        # Apply user translation
         user_t.Translate(self._tx, self._ty, self._tz)
 
-        # Apply rotations
-        user_t.RotateX(-self._rx) 
-        user_t.RotateY(-self._ry) 
-        user_t.RotateZ(-self._rz) 
-
         # Move volume back
-        user_t.Translate(self.moving_matrix[0:3,3]) 
+        user_t.Translate(center)
 
-        # ---------------- Combined transform for reslice ---------------- 
-        final_t = vtk.vtkTransform() 
-        final_t.PostMultiply() 
+        # ---------------- Combined transform for reslice ----------------
+        final_t = vtk.vtkTransform()
+        final_t.PostMultiply()
 
-        pre_vtk_mat = vtk.vtkMatrix4x4() 
-        for i in range(4): 
-            for j in range(4): 
-                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j]) 
-
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration 
-        final_t.Concatenate(user_t)       # user-applied 
-        self.transform.DeepCopy(final_t) 
-        self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
-        self.reslice3d.Modified() 
-        self._blend_dirty = True 
-
-        # ---------------- Display-only user_transform ----------------
-        # Extract the pure rotation 3x3 from user_t
-        vtkmat = user_t.GetMatrix()
-        rot3x3 = np.eye(3)
-        for i in range(3):
-            for j in range(3):
-                rot3x3[i, j] = vtkmat.GetElement(i, j)
-
-        # LPS to RAS: flip coordinates for X,Y rotations and negate Z rotation
-        lps_to_ras = np.array([
-            [-1,  0,  0],
-            [ 0, -1,  0],
-            [ 0,  0,  1]
-        ])
-        rot_temp = lps_to_ras @ rot3x3 @ lps_to_ras.T
-
-        # Additionally flip Z rotation by negating specific matrix elements
-        rot_ras = rot_temp.copy()
-        rot_ras[0, 1] = -rot_ras[0, 1]  # Negate sin(z) component
-        rot_ras[1, 0] = -rot_ras[1, 0]  # Negate -sin(z) component
-
-        # Build display matrix
-        display_mat = np.eye(4)
-        display_mat[0:3, 0:3] = rot_ras
-        display_mat[0:3, 3] = np.array([self._tx, self._ty, self._tz])
-
-        vtk_display = vtk.vtkMatrix4x4()
+        pre_vtk_mat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
-                vtk_display.SetElement(i, j, display_mat[i, j])
+                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
 
-        self.user_transform.SetMatrix(vtk_display)
+        final_t.Concatenate(pre_vtk_mat)  # pre-registration
+        final_t.Concatenate(user_t)       # user transform
 
+        self.transform.DeepCopy(final_t)
+        self.user_transform.DeepCopy(user_t)
 
-
+        self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
+        self.reslice3d.Modified()
+        self._blend_dirty = True
 
     # ---------------- Pipeline Utilities ----------------
+
     def _wire_blend(self):
         self.blend.RemoveAllInputs()
         if self.fixed_reader is not None:
@@ -529,6 +643,7 @@ class VTKEngine:
     def _sync_reslice_output_to_fixed(self):
         if self.fixed_reader is None:
             return
+
         fixed = self.fixed_reader.GetOutput()
         fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
         fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
@@ -538,13 +653,11 @@ class VTKEngine:
         self.reslice3d.SetOutputExtent(fixed.GetExtent())
         self.reslice3d.Modified()
 
-
     def set_interpolation_linear(self, linear: bool = True):
         if linear:
             self.reslice3d.SetInterpolationModeToLinear()
         else:
             self.reslice3d.SetInterpolationModeToNearestNeighbor()
-
 
 # ------------------------------ Transform Matrix Dialog ------------------------------
 
@@ -582,6 +695,15 @@ class TransformMatrixDialog(QtWidgets.QDialog):
         for i in range(4):
             for j in range(4):
                 item = QtWidgets.QTableWidgetItem(f"{mat.GetElement(i,j):.2f}")
+                item.setTextAlignment(QtCore.Qt.AlignCenter)
+                self.table.setItem(i, j, item)
+
+    def set_corrected_matrix(self, engine: 'VTKEngine', orientation=None, slice_idx=None):
+        """Set the matrix display to show the corrected user transform matrix."""
+        mat = engine.get_user_transform_matrix(orientation, slice_idx)
+        for i in range(4):
+            for j in range(4):
+                item = QtWidgets.QTableWidgetItem(f"{mat[i,j]:.2f}")
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
                 self.table.setItem(i, j, item)
 
@@ -708,9 +830,11 @@ class FusionUI(QtWidgets.QWidget):
         # Graphics views for slices
         right = QtWidgets.QWidget(self)
         grid = QtWidgets.QGridLayout(right)
+
         self.viewer_ax = SliceGraphicsView()
         self.viewer_co = SliceGraphicsView()
         self.viewer_sa = SliceGraphicsView()
+
         grid.addWidget(self.viewer_ax,0,0)
         grid.addWidget(self.viewer_co,0,1)
         grid.addWidget(self.viewer_sa,1,0,1,2)
@@ -726,21 +850,38 @@ class FusionUI(QtWidgets.QWidget):
     def _show_matrix_dialog(self):
         if self._matrix_dialog is None:
             self._matrix_dialog = TransformMatrixDialog(self)
-        # Always update the matrix to the current transform before showing
+        
         # Find the controller and engine
         parent = self.parent()
         engine = None
-        # Try to find the engine from the parent chain (robust for your structure)
+        controller = None
+        
         while parent is not None:
             if hasattr(parent, "engine"):
                 engine = parent.engine
+            if hasattr(parent, "ctrl"):
+                controller = parent.ctrl
                 break
             parent = getattr(parent, "parent", lambda: None)()
-        # Fallback: try global variable if needed
-        if engine is None and "engine" in globals():
-            engine = globals()["engine"]
+        
+        # Get current slice info for proper calculation
+        orientation = VTKEngine.ORI_AXIAL  # Default
+        slice_idx = self.s_axial.value()
+        
+        # Try to determine which slice is currently focused/active
+        if self.s_axial.hasFocus():
+            orientation = VTKEngine.ORI_AXIAL
+            slice_idx = self.s_axial.value()
+        elif self.s_coronal.hasFocus():
+            orientation = VTKEngine.ORI_CORONAL
+            slice_idx = self.s_coronal.value()
+        elif self.s_sagittal.hasFocus():
+            orientation = VTKEngine.ORI_SAGITTAL
+            slice_idx = self.s_sagittal.value()
+        
         if engine is not None:
-            self._matrix_dialog.set_matrix(engine.user_transform)
+            self._matrix_dialog.set_corrected_matrix(engine, orientation, slice_idx)
+        
         self._matrix_dialog.show()
         self._matrix_dialog.raise_()
         self._matrix_dialog.activateWindow()
@@ -749,6 +890,7 @@ class FusionUI(QtWidgets.QWidget):
 
 class Controller(QtCore.QObject):
     DEBOUNCE_MS = 0
+
     def __init__(self, ui: FusionUI, engine: VTKEngine):
         super().__init__()
         self.ui = ui
@@ -805,13 +947,12 @@ class Controller(QtCore.QObject):
         self.engine._rz = self.ui.s_rz.value() / 10.0
 
         self.engine._apply_transform(orientation, slice_idx)
-
         self.engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
-        # update matrix dialog if open
+        # Update matrix dialog if open with corrected values
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_corrected_matrix(self.engine, orientation, slice_idx)
 
     def _update_opacity(self, a: float):
         self.engine.set_opacity(a)
@@ -840,9 +981,8 @@ class Controller(QtCore.QObject):
         self.ui.s_tx.setValue(0)
         self.ui.s_ty.setValue(0)
         self.ui.s_tz.setValue(0)
-
         if self.ui._matrix_dialog:
-            self.ui._matrix_dialog.set_matrix(self.engine.user_transform)
+            self.ui._matrix_dialog.set_corrected_matrix(self.engine)
 
     def _sync_slice_ranges(self):
         ext = self.engine.fixed_extent()

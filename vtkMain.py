@@ -159,6 +159,8 @@ class VTKEngine:
         self._temp_dirs = []
         atexit.register(self._cleanup_temp_dirs)
 
+    
+
     def cleanup_old_temp_dirs(self):
         cleanup_old_dicom_temp_dirs()
 
@@ -449,10 +451,9 @@ class VTKEngine:
         if not self.fixed_reader or not self.moving_reader:
             return
 
-        img = self.fixed_reader.GetOutput()
+        # ---------------- Compute moving center in voxel space ----------------
+        img = self.moving_reader.GetOutput()
         extent = img.GetExtent()
-
-        # Center voxel indices (i,j,k)
         center_voxel = np.array([
             0.5 * (extent[0] + extent[1]),
             0.5 * (extent[2] + extent[3]),
@@ -460,39 +461,59 @@ class VTKEngine:
             1.0
         ], dtype=float)
 
-        # Use voxel->RAS matrix to compute center in RAS
-        center_world_h = self.fixed_matrix @ center_voxel
-        center_world = center_world_h[0:3]
+        # Convert center voxel to RAS using pre-registration
+        center_ras_hom = self.pre_transform @ center_voxel
+        pivot_ras = center_ras_hom[0:3]
 
+        # ---------------- Build user-only transform matrix ----------------
+        # Translation to pivot
+        T1 = np.eye(4)
+        T1[0:3, 3] = -pivot_ras
 
-        # ---------------- User transform only ----------------
-        user_t = vtk.vtkTransform()
-        user_t.PostMultiply()
-        user_t.Translate(-center_world)
-        user_t.RotateX(self._rx)
-        user_t.RotateY(self._ry)
-        user_t.RotateZ(self._rz)
-        user_t.Translate(center_world)
-        user_t.Translate(self._tx, self._ty, self._tz)
+        # Rotations (X,Y,Z in degrees)
+        rx, ry, rz = np.deg2rad([self._rx, self._ry, self._rz])
+        # Rotation matrices
+        Rx = np.eye(4)
+        Rx[1,1] = np.cos(rx); Rx[1,2] = -np.sin(rx); Rx[2,1] = np.sin(rx); Rx[2,2] = np.cos(rx)
+        Ry = np.eye(4)
+        Ry[0,0] = np.cos(ry); Ry[0,2] = np.sin(ry);  Ry[2,0] = -np.sin(ry); Ry[2,2] = np.cos(ry)
+        Rz = np.eye(4)
+        Rz[0,0] = np.cos(rz); Rz[0,1] = -np.sin(rz); Rz[1,0] = np.sin(rz); Rz[1,1] = np.cos(rz)
 
-        # Save **just the user transform** for GUI
-        self.user_transform.DeepCopy(user_t)
+        R = Rz @ Ry @ Rx  # Apply in Z-Y-X order
 
-        # ---------------- Combined transform for reslice ----------------
-        final_t = vtk.vtkTransform()
-        final_t.PostMultiply()
-        pre_vtk_mat = vtk.vtkMatrix4x4()
+        # Translate back + user translation
+        T2 = np.eye(4)
+        T2[0:3, 3] = pivot_ras + np.array([self._tx, self._ty, self._tz])
+
+        # Final user-only matrix
+        user_mat = T2 @ R @ T1
+
+        # Save for GUI display
+        self.user_transform_mat = user_mat.copy()
+
+        # ---------------- Apply to reslice (combined with pre-registration) ----------------
+        final_mat = self.pre_transform @ user_mat
+        vtkmat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
-                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
+                vtkmat.SetElement(i, j, final_mat[i,j])
 
-        final_t.Concatenate(pre_vtk_mat)  # pre-registration
-        final_t.Concatenate(user_t)       # user transform
-
-        self.transform.DeepCopy(final_t)
-        self.reslice3d.SetResliceAxes(self.transform.GetMatrix())
+        self.reslice3d.SetResliceAxes(vtkmat)
         self.reslice3d.Modified()
         self._blend_dirty = True
+
+        # Debug info
+        transformed_center = final_mat @ center_voxel
+        print(f"--- DEBUG ---")
+        print(f"Pivot RAS: {pivot_ras}")
+        print(f"User translation: tx,ty,tz = {self._tx} {self._ty} {self._tz}")
+        print(f"User rotation (deg) rx,ry,rz = {self._rx} {self._ry} {self._rz}")
+        print(f"Moving volume center after transform (RAS mm): {transformed_center[0:3]}")
+        print("--- User-only transform matrix ---")
+        print(user_mat)
+
+
 
 
 
