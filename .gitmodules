@@ -1,3 +1,0 @@
-[submodule "extern/vtk-dicom"]
-	path = extern/vtk-dicom
-	url = https://github.com/dgobbi/vtk-dicom
