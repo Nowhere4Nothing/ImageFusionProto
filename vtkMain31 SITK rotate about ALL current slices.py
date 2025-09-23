@@ -465,6 +465,8 @@ class VTKEngine:
         if not self.fixed_reader:
             return
         
+        #TODO: UPDATE THIS TO HANDLE ALL 3 ORIENTATIONS LIKE APPLY_TRANSFORM DOES CURRENTLY
+
         # ---------------------------
         # Step 0: Get DICOM first slice IPP
         # ---------------------------
