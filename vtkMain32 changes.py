@@ -282,50 +282,54 @@ class VTKEngine:
         R_fixed = self.fixed_matrix[0:3,0:3] / np.array([np.linalg.norm(self.fixed_matrix[0:3,i]) for i in range(3)])
         R_moving = self.moving_matrix[0:3,0:3] / np.array([np.linalg.norm(self.moving_matrix[0:3,i]) for i in range(3)])
         R = R_fixed.T @ R_moving
-
         t = self.moving_matrix[0:3,3] - self.fixed_matrix[0:3,3]
 
         pre_transform = np.eye(4)
         pre_transform[0:3,0:3] = R
         pre_transform[0:3,3] = t
         self.pre_transform = pre_transform
+        self.original_pre_transform = self.pre_transform.copy()
 
         print("--- Pre-registration transform ---")
         print(pre_transform)
         print("Pre-reg translation (mm):", t)
 
-        # --- Apply pre-transform in VTK ---
-        vtkmat = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                vtkmat.SetElement(i,j, pre_transform[i,j])
+        # --- Bake the pre-transform immediately ---
+        self._tx = self._ty = self._tz = 0.0
+        self._rx = self._ry = self._rz = 0.0
+        self.bake_current_transform()  # applies pre_transform + resets it
 
-        self.reslice3d.SetInputConnection(flip.GetOutputPort())
-        self.reslice3d.SetResliceAxes(vtkmat)
-        self._sync_reslice_output_to_fixed()
+        # From now on, pre_transform is identity
+        self.pre_transform = np.eye(4)
+
+        # Re-wire pipeline using baked image
         self._wire_blend()
+        self._sync_reslice_output_to_fixed()
 
         return True
-
-
-
-
 
 
     # ---------------- Transformation Utilities ----------------
     def set_translation(self, tx: float, ty: float, tz: float):
         self._tx, self._ty, self._tz = float(tx), float(ty), float(tz)
-        self._apply_transform()
 
     def set_rotation_deg(self, rx: float, ry: float, rz: float, orientation=None, slice_idx=None):
         self._rx, self._ry, self._rz = float(rx), float(ry), float(rz)
-        self._apply_transform(orientation, slice_idx, pivot_mode="current_slice" if orientation and slice_idx is not None else "dataset_center")
+        # If orientation is "multi", interpret slice_idx as a tuple of (axial, coronal, sagittal)
+        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
+            self._apply_transform(orientation, slice_idx)
+        else:
+            self._apply_transform(orientation, slice_idx, pivot_mode="current_slice" if orientation and slice_idx is not None else "dataset_center")
 
     def reset_transform(self):
         self._tx = self._ty = self._tz = 0.0
         self._rx = self._ry = self._rz = 0.0
-        self.transform.Identity()
-        self._blend_dirty = True
+        self._bake_next_transform = False
+        # Restore pre_transform to the original DICOM transform from when the moving image was loaded
+        if hasattr(self, "original_pre_transform"):
+            self.pre_transform = self.original_pre_transform.copy()
+        else:
+            self.pre_transform = np.eye(4, dtype=np.float64)
         self._apply_transform()
 
     def set_opacity(self, alpha: float):
@@ -552,17 +556,41 @@ class VTKEngine:
 
 
     # ---------------- Internal Transform Application ----------------
-    def _apply_transform(self, orientation=None, slice_idx=None): 
-        if not self.fixed_reader or not self.moving_reader: 
+    def _apply_transform(self, orientation=None, slice_idx=None, pivot_mode=None):
+        if not self.fixed_reader or not self.moving_reader:
             return
+
         img = self.fixed_reader.GetOutput()
         center = np.array(img.GetCenter())
 
-        # If orientation and slice_idx are provided, compute the slice center
-        if orientation is not None and slice_idx is not None:
-            extent = img.GetExtent()
-            spacing = img.GetSpacing()
-            origin = img.GetOrigin()
+        extent = img.GetExtent()
+        spacing = img.GetSpacing()
+        origin = img.GetOrigin()
+
+        # If orientation is "multi" and slice_idx is a tuple, use all three indices to compute a 3D center
+        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
+            axial_idx, coronal_idx, sagittal_idx = slice_idx
+            # Compute the center in world coordinates using all three indices
+            x = int(np.clip(sagittal_idx, extent[0], extent[1]))
+            y = int(np.clip(coronal_idx, extent[2], extent[3]))
+            z = int(np.clip(axial_idx, extent[4], extent[5]))
+            center = np.array([
+                origin[0] + x * spacing[0],
+                origin[1] + y * spacing[1],
+                origin[2] + z * spacing[2]
+            ])
+            # Offset center by pre-transform translation
+            pre_t = vtk.vtkMatrix4x4()
+            for i in range(4):
+                for j in range(4):
+                    pre_t.SetElement(i, j, self.pre_transform[i, j])
+            tx = pre_t.GetElement(0, 3)
+            ty = pre_t.GetElement(1, 3)
+            tz = pre_t.GetElement(2, 3)
+            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
+            center += offset_voxels * spacing
+        elif orientation is not None and slice_idx is not None:
+            # Fallback to old behavior for single orientation
             if orientation == VTKEngine.ORI_AXIAL:
                 z = int(np.clip(slice_idx, extent[4], extent[5]))
                 center = np.array([
@@ -584,20 +612,17 @@ class VTKEngine:
                     origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
                     origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
                 ])
-
             # Offset center by pre-transform translation
             pre_t = vtk.vtkMatrix4x4()
             for i in range(4):
                 for j in range(4):
                     pre_t.SetElement(i, j, self.pre_transform[i, j])
-
             tx = pre_t.GetElement(0, 3)
             ty = pre_t.GetElement(1, 3)
             tz = pre_t.GetElement(2, 3)
-
             offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
             center += offset_voxels * spacing
-        
+
         ras_center = -self.moving_matrix[0:3,3]
 
         
@@ -634,6 +659,128 @@ class VTKEngine:
         self.reslice3d.Modified() 
         self._update_sitk_transform(orientation, slice_idx)
         self._blend_dirty = True 
+
+    def bake_pre_alignment(self):
+        """Bake the existing self.pre_transform into the moving image, then reset pre_transform -> identity."""
+        if not self.moving_reader or not self.fixed_reader:
+            return
+
+        print("Baking pre-alignment into moving image...")
+
+        # Build vtkTransform from pre_transform (self.pre_transform is in RAS already)
+        pre_tfm = vtk.vtkTransform()
+        pre_tfm.PostMultiply()
+        pre_vtk_mat = vtk.vtkMatrix4x4()
+        for i in range(4):
+            for j in range(4):
+                pre_vtk_mat.SetElement(i, j, float(self.pre_transform[i, j]))
+        pre_tfm.SetMatrix(pre_vtk_mat)
+
+        # Reslice: move moving image into fixed image geometry using pre_tfm
+        reslice = vtk.vtkImageReslice()
+        reslice.SetInputConnection(self.moving_reader.GetOutputPort())
+        reslice.SetResliceTransform(pre_tfm)                     # <-- correct API
+        reslice.SetInterpolationModeToLinear()
+        reslice.SetAutoCropOutput(1)
+        # propagate background level from reslice3d if set
+        reslice.SetBackgroundLevel(self.reslice3d.GetBackgroundLevel())
+
+        fixed_img = self.fixed_reader.GetOutput()
+        # convert fixed origin LPS -> RAS like your _sync_reslice_output_to_fixed()
+        fixed_origin_lps = np.array(fixed_img.GetOrigin(), dtype=float)
+        fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
+
+        reslice.SetOutputSpacing(fixed_img.GetSpacing())
+        reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
+        reslice.SetOutputExtent(fixed_img.GetExtent())
+        reslice.Update()
+
+        # Replace moving_reader with the baked image
+        baked_image = vtk.vtkImageData()
+        baked_image.DeepCopy(reslice.GetOutput())
+
+        self.moving_reader = vtk.vtkTrivialProducer()
+        self.moving_reader.SetOutput(baked_image)
+        self.moving_reader.Update()
+
+        # Reset pre_transform since it was baked into the data
+        self.pre_transform = np.eye(4, dtype=np.float64)
+
+        # Reset user sliders / transforms (clean slate)
+        self._tx = self._ty = self._tz = 0.0
+        self._rx = self._ry = self._rz = 0.0
+        self._bake_next_transform = False
+        self.user_transform.Identity()
+        self.transform.Identity()
+
+        # Re-wire pipeline and update viewers
+        self._wire_blend()
+        self._sync_reslice_output_to_fixed()
+        self._apply_transform()
+
+
+    def bake_current_transform(self):
+        """
+        Permanently apply the current transform to the moving volume data.
+        This will resample the moving image with the current transform, so the axes are reset.
+        After baking, the moving image is in the fixed image's space, and all transforms are reset.
+        """
+        print("Baking current transform into moving image data...")
+        if not self.moving_reader:
+            return
+
+        # 1. Get the current full transform as a vtkMatrix4x4 (pre_transform + user transform)
+        current_transform = vtk.vtkTransform()
+        current_transform.PostMultiply()
+        pre_vtk_mat = vtk.vtkMatrix4x4()
+        for i in range(4):
+            for j in range(4):
+                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j])
+        current_transform.Concatenate(pre_vtk_mat)
+        # User transform (rotation/translation)
+        img = self.fixed_reader.GetOutput()
+        center = np.array(img.GetCenter())
+        user_t = vtk.vtkTransform()
+        user_t.PostMultiply()
+        user_t.Translate(-center)
+        user_t.RotateX(self._rx)
+        user_t.RotateY(self._ry)
+        user_t.RotateZ(self._rz)
+        user_t.Translate(center)
+        user_t.Translate(self._tx, self._ty, self._tz)
+        current_transform.Concatenate(user_t)
+
+        # 2. Resample the moving image with the current transform, output in fixed image's geometry
+        reslice = vtk.vtkImageReslice()
+        reslice.SetInputConnection(self.moving_reader.GetOutputPort())
+        reslice.SetResliceAxes(current_transform.GetMatrix())
+        reslice.SetInterpolationModeToLinear()
+        fixed_img = self.fixed_reader.GetOutput()
+        reslice.SetOutputSpacing(fixed_img.GetSpacing())
+        reslice.SetOutputOrigin(fixed_img.GetOrigin())
+        reslice.SetOutputExtent(fixed_img.GetExtent())
+        reslice.Update()
+
+        # 3. Replace the moving_reader with the resampled image (now axes are "reset")
+        # Use the output of reslice directly as the new moving_reader
+        # This is the most robust way to "bake" in VTK: use vtkImageData as the new source.
+        baked_image = vtk.vtkImageData()
+        baked_image.DeepCopy(reslice.GetOutput())
+        self.moving_reader = vtk.vtkTrivialProducer()
+        self.moving_reader.SetOutput(baked_image)
+        self.moving_reader.Update()
+
+        # 4. Reset all transforms and treat the new image as a clean slate
+        self._tx = self._ty = self._tz = 0.0
+        self._rx = self._ry = self._rz = 0.0
+        self.pre_transform = np.eye(4, dtype=np.float64)
+        self._bake_next_transform = False
+
+        # 5. Re-wire the blend and reslice pipeline
+        self._wire_blend()
+        self._sync_reslice_output_to_fixed()
+        self._apply_transform()
+
 
 
 
@@ -903,16 +1050,17 @@ class Controller(QtCore.QObject):
         self.moving_color = "Green"
         self.coloring_enabled = True
         self._wire()
+        self._last_active_slider = None
 
     def _wire(self):
         self.ui.loadFixed.connect(self.on_load_fixed)
         self.ui.loadMoving.connect(self.on_load_moving)
-        self.ui.txChanged.connect(lambda v: self._update_transform())
-        self.ui.tyChanged.connect(lambda v: self._update_transform())
-        self.ui.tzChanged.connect(lambda v: self._update_transform())
-        self.ui.rxChanged.connect(lambda v: self._update_transform())
-        self.ui.ryChanged.connect(lambda v: self._update_transform())
-        self.ui.rzChanged.connect(lambda v: self._update_transform())
+        self.ui.txChanged.connect(lambda v: self._handle_slider_change("tx"))
+        self.ui.tyChanged.connect(lambda v: self._handle_slider_change("ty"))
+        self.ui.tzChanged.connect(lambda v: self._handle_slider_change("tz"))
+        self.ui.rxChanged.connect(lambda v: self._handle_slider_change("rx"))
+        self.ui.ryChanged.connect(lambda v: self._handle_slider_change("ry"))
+        self.ui.rzChanged.connect(lambda v: self._handle_slider_change("rz"))
         self.ui.opacityChanged.connect(lambda a: self._update_opacity(a))
         self.ui.resetRequested.connect(self.on_reset)
         self.ui.axialSliceChanged.connect(lambda i: self.refresh_slice("axial",i))
@@ -922,35 +1070,41 @@ class Controller(QtCore.QObject):
         self.ui.moving_color_combo.currentTextChanged.connect(self._on_moving_color_changed)
         self.ui.coloring_checkbox.stateChanged.connect(self._on_coloring_checkbox_changed)
 
+    def _handle_slider_change(self, slider_name):
+        # If the active slider changes, bake the current transform
+        if self._last_active_slider is not None and self._last_active_slider != slider_name:
+            self.engine.bake_current_transform()
+            self.reset_transform_sliders()
+        self._last_active_slider = slider_name
+        self._update_transform()
+
+    def reset_transform_sliders(self):
+        for slider in [
+            self.ui.s_tx, self.ui.s_ty, self.ui.s_tz,
+            self.ui.s_rx, self.ui.s_ry, self.ui.s_rz
+        ]:
+            slider.blockSignals(True)
+            slider.setValue(0)
+            slider.blockSignals(False)
+
     def _update_transform(self):
-        # Determine which orientation and slice to use for rotation center
-        # Priority: axial, then coronal, then sagittal (could be improved to use the last interacted)
-        orientation = None
-        slice_idx = None
-        if self.ui.s_axial.hasFocus():
-            orientation = VTKEngine.ORI_AXIAL
-            slice_idx = self.ui.s_axial.value()
-        elif self.ui.s_coronal.hasFocus():
-            orientation = VTKEngine.ORI_CORONAL
-            slice_idx = self.ui.s_coronal.value()
-        elif self.ui.s_sagittal.hasFocus():
-            orientation = VTKEngine.ORI_SAGITTAL
-            slice_idx = self.ui.s_sagittal.value()
-        else:
-            # Default to axial if none focused
-            orientation = VTKEngine.ORI_AXIAL
-            slice_idx = self.ui.s_axial.value()
+        # Use the current values of all three slice sliders to compute a 3D center for rotation
+        axial_idx = self.ui.s_axial.value()
+        coronal_idx = self.ui.s_coronal.value()
+        sagittal_idx = self.ui.s_sagittal.value()
 
-        self.engine._tx = self.ui.s_tx.value()
-        self.engine._ty = self.ui.s_ty.value()
-        self.engine._tz = self.ui.s_tz.value()
-        self.engine._rx = self.ui.s_rx.value() / 10.0
-        self.engine._ry = self.ui.s_ry.value() / 10.0
-        self.engine._rz = self.ui.s_rz.value() / 10.0
+        # Set translation and rotation, then apply the transform ONCE with all current values
+        self.engine._tx = float(self.ui.s_tx.value())
+        self.engine._ty = float(self.ui.s_ty.value())
+        self.engine._tz = float(self.ui.s_tz.value())
+        self.engine._rx = float(self.ui.s_rx.value() / 10.0)
+        self.engine._ry = float(self.ui.s_ry.value() / 10.0)
+        self.engine._rz = float(self.ui.s_rz.value() / 10.0)
 
-        self.engine._apply_transform(orientation, slice_idx)
-
-        self.engine.set_interpolation_linear(False)
+        self.engine._apply_transform(
+            orientation="multi",
+            slice_idx=(axial_idx, coronal_idx, sagittal_idx)
+        )
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
         # update matrix dialog if open

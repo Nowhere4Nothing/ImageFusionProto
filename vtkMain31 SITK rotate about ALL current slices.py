@@ -459,84 +459,59 @@ class VTKEngine:
         qimg = QtGui.QImage(rgb.data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
         qimg = qimg.copy()
         return aspect_ratio_correct(qimg, h, w, orientation)
-    
-    def _debug_pivot_locations(self, pivot_ras):
-        # pivot_ras: numpy 3-vector in RAS
-        pr = np.array([pivot_ras[0], pivot_ras[1], pivot_ras[2], 1.0])
 
-        # pivot in fixed voxel coords (IJK-like)
-        inv_fixed = np.linalg.inv(self.fixed_matrix)
-        pivot_in_fixed_voxel = inv_fixed @ pr
 
-        # pivot in moving voxel coords
-        inv_moving = np.linalg.inv(self.moving_matrix)
-        pivot_in_moving_voxel = inv_moving @ pr
-
-        print("[DBG] pivot_ras:", pivot_ras)
-        print("[DBG] pivot_in_fixed_voxel:", pivot_in_fixed_voxel)
-        print("[DBG] pivot_in_moving_voxel:", pivot_in_moving_voxel)
-
-    def _update_sitk_transform(self, axial_idx=None, coronal_idx=None, sagittal_idx=None):
+    def _update_sitk_transform(self, orientation=None, slice_idx=None):
         if not self.fixed_reader:
             return
-
-        print("\n--- Updating SITK Transform ---")
-
+        
         # ---------------------------
         # Step 0: Get DICOM first slice IPP
         # ---------------------------
         dicom_ipp0 = get_first_slice_ipp(self.fixed_dir)
         sitk_origin = np.array(self.fixed_img.GetOrigin())
         origin_shift = dicom_ipp0 - sitk_origin  # shift to align SITK origin with DICOM IPP
-        print(f"SITK Origin: {sitk_origin}")
-        print(f"DICOM IPP (first slice): {dicom_ipp0}")
-        print(f"Origin shift (DICOM - SITK): {origin_shift}")
-
+       
         # ---------------------------
         # Step 1: Default pivot = volume center
         # ---------------------------
         voxel = np.array(self.fixed_img.GetSize()) / 2.0
-        print(f"Default voxel center (volume mid): {voxel}")
 
         # ---------------------------
         # Step 2: Override pivot if slice info provided
         # ---------------------------
-        # Clamp indices to valid ranges
-        z = np.array([self.fixed_img.GetWidth() // 2,
+        if orientation is not None and slice_idx is not None:
+            if orientation == VTKEngine.ORI_AXIAL:
+                voxel = np.array([
+                    self.fixed_img.GetWidth() // 2,
                     self.fixed_img.GetHeight() // 2,
-                    axial_idx])
-        y = np.array([self.fixed_img.GetWidth() // 2,
-                    coronal_idx,
-                    self.fixed_img.GetDepth() // 2])
-        x = np.array([sagittal_idx,
+                    slice_idx
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                voxel = np.array([
+                    self.fixed_img.GetWidth() // 2,
+                    slice_idx,
+                    self.fixed_img.GetDepth() // 2
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                voxel = np.array([
+                    slice_idx,
                     self.fixed_img.GetHeight() // 2,
-                    self.fixed_img.GetDepth() // 2])
+                    self.fixed_img.GetDepth() // 2
+                ])
 
         # ---------------------------
         # Step 3: Convert voxel → physical point in DICOM space
         # ---------------------------
         center = np.array(self.fixed_img.TransformIndexToPhysicalPoint([int(v) for v in voxel]))
-        print(f"Physical center from SITK (before origin shift & pre-translation): {center}")
 
         # Apply DICOM origin shift
         center += origin_shift
-        print(f"Physical center after origin shift: {center}")
-
-        # ---------------------------
-        # Step 4: Apply pre-translation (from VTK pre_transform)
-        # ---------------------------
-        tx = self.pre_transform[0, 3]
-        ty = self.pre_transform[1, 3]
-        tz = self.pre_transform[2, 3]
-        print(f"Pre-translation (from VTK): ({tx}, {ty}, {tz})")
-
-        #center += np.array([tx, ty, tz])
-        print(f"Final physical center (pivot in DICOM): {center}")
 
         # ---------------------------
         # Step 5: Build rotation matrix (Rx, Ry, Rz in radians)
         # ---------------------------
-        rx, ry, rz = np.deg2rad([self._rx, self._ry, self._rz])
+        rx, ry, rz = np.deg2rad([self._rx, self._ry, -self._rz])
 
         Rx = np.array([[1, 0, 0],
                     [0, np.cos(rx), -np.sin(rx)],
@@ -549,7 +524,6 @@ class VTKEngine:
                     [0, 0, 1]])
 
         R = Rz @ Ry @ Rx  # ITK order: Rz * Ry * Rx
-        print(f"Rotation matrix R:\n{R}")
 
         # ---------------------------
         # Step 6: Bake pivot into translation
@@ -568,7 +542,6 @@ class VTKEngine:
         mat[:3, :3] = R
         mat[:3, 3] = baked_t
         self.sitk_matrix = mat
-        print(f"SITK 4x4 matrix (LPS, baked pivot):\n{self.sitk_matrix}")
 
         # ---------------------------
         # Step 8: Convert LPS → RAS (for VTK/Slicer comparison)
@@ -576,63 +549,77 @@ class VTKEngine:
         LPS_to_RAS = np.diag([-1, -1, 1, 1])
         ras_matrix = LPS_to_RAS @ self.sitk_matrix @ LPS_to_RAS
         self.sitk_matrix = ras_matrix
-        print(f"SITK 4x4 matrix (RAS, baked pivot):\n{self.sitk_matrix}")
-
-        print("--- End of SITK Transform Update ---\n")
-
-
-
-
-
-
 
 
     # ---------------- Internal Transform Application ----------------
-    def _apply_transform(self, axial_idx=None, coronal_idx=None, sagittal_idx=None):
-        if not self.fixed_reader or not self.moving_reader:
+    def _apply_transform(self, orientation=None, slice_idx=None): 
+        if not self.fixed_reader or not self.moving_reader: 
             return
-            
         img = self.fixed_reader.GetOutput()
+        center = np.array(img.GetCenter())
+
         extent = img.GetExtent()
         spacing = img.GetSpacing()
         origin = img.GetOrigin()
-        
-        # If all slice indices are provided, compute the intersection point
-        if all(idx is not None for idx in [axial_idx, coronal_idx, sagittal_idx]):
-            # Clamp indices to valid ranges
-            z = int(np.clip(axial_idx, extent[4], extent[5]))
-            y = int(np.clip(coronal_idx, extent[2], extent[3]))
+
+        # If orientation is "multi" and slice_idx is a tuple, use all three indices to compute a 3D center
+        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
+            axial_idx, coronal_idx, sagittal_idx = slice_idx
+            # Compute the center in world coordinates using all three indices
             x = int(np.clip(sagittal_idx, extent[0], extent[1]))
-            
-            # Calculate the RAS coordinates of the intersection point
+            y = int(np.clip(coronal_idx, extent[2], extent[3]))
+            z = int(np.clip(axial_idx, extent[4], extent[5]))
             center = np.array([
                 origin[0] + x * spacing[0],
                 origin[1] + y * spacing[1],
                 origin[2] + z * spacing[2]
             ])
-            
-            print(f"Using pivot from all views: x={x}, y={y}, z={z}")
-            print(f"Pivot in RAS coordinates: {center}")
-        else:
-            # Fallback to volume center if not all slices are provided
-            center = np.array(img.GetCenter())
-            print("Using volume center as pivot")
+            # Offset center by pre-transform translation
+            pre_t = vtk.vtkMatrix4x4()
+            for i in range(4):
+                for j in range(4):
+                    pre_t.SetElement(i, j, self.pre_transform[i, j])
+            tx = pre_t.GetElement(0, 3)
+            ty = pre_t.GetElement(1, 3)
+            tz = pre_t.GetElement(2, 3)
+            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
+            center += offset_voxels * spacing
+        elif orientation is not None and slice_idx is not None:
+            # Fallback to old behavior for single orientation
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
 
-        # Adjust pivot by pre-transform translation
-        pre_t = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                pre_t.SetElement(i, j, self.pre_transform[i, j])
+            # Offset center by pre-transform translation
+            pre_t = vtk.vtkMatrix4x4()
+            for i in range(4):
+                for j in range(4):
+                    pre_t.SetElement(i, j, self.pre_transform[i, j])
 
-        tx = pre_t.GetElement(0, 3)
-        ty = pre_t.GetElement(1, 3)
-        tz = pre_t.GetElement(2, 3)
+            tx = pre_t.GetElement(0, 3)
+            ty = pre_t.GetElement(1, 3)
+            tz = pre_t.GetElement(2, 3)
 
-        offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
-        center += offset_voxels * spacing
-
-        print(f"Final pivot/center used in _apply_transform (physical coordinates): {center}")
-
+            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
+            center += offset_voxels * spacing
         
         ras_center = -self.moving_matrix[0:3,3]
 
@@ -668,7 +655,7 @@ class VTKEngine:
         self.user_transform.DeepCopy(user_t) 
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
         self.reslice3d.Modified() 
-        self._update_sitk_transform(axial_idx=axial_idx, coronal_idx=coronal_idx, sagittal_idx=sagittal_idx)
+        self._update_sitk_transform(orientation, slice_idx)
         self._blend_dirty = True 
 
 
@@ -717,6 +704,11 @@ class TransformMatrixDialog(QtWidgets.QDialog):
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         layout.addWidget(self.table)
 
+        # Add copy button
+        self.copy_btn = QtWidgets.QPushButton("Copy to Clipboard")
+        self.copy_btn.clicked.connect(self.copy_matrix_to_clipboard)
+        layout.addWidget(self.copy_btn)
+
         # Initialize with identity matrix
         self._init_identity_matrix()
 
@@ -734,12 +726,31 @@ class TransformMatrixDialog(QtWidgets.QDialog):
                 self.table.setItem(i, j, item)
 
     def set_matrix(self, mat):
+        self._current_matrix = mat
         for i in range(4):
             for j in range(4):
                 value = float(mat[i, j]) if hasattr(mat, "__getitem__") else mat.GetElement(i, j)
-                item = QtWidgets.QTableWidgetItem(f"{value:.2f}")
+                item = QtWidgets.QTableWidgetItem(f"{value:.5f}")
                 item.setTextAlignment(QtCore.Qt.AlignCenter)
                 self.table.setItem(i, j, item)
+
+    def copy_matrix_to_clipboard(self):
+        # Format matrix as requested: 5 decimals, space-separated, one row per line
+        mat = self._current_matrix
+        if hasattr(mat, "GetElement"):
+            # vtkMatrix4x4
+            rows = [
+                " ".join(f"{mat.GetElement(i, j):.5f}" for j in range(4))
+                for i in range(4)
+            ]
+        else:
+            # numpy or similar
+            rows = [
+                " ".join(f"{float(mat[i, j]):.5f}" for j in range(4))
+                for i in range(4)
+            ]
+        text = "\n".join(rows)
+        QtWidgets.QApplication.clipboard().setText(text)
 
 # ------------------------------ Qt Display ------------------------------
 
@@ -829,9 +840,9 @@ class FusionUI(QtWidgets.QWidget):
         form.addRow("Sagittal Slice", self.s_sagittal)
 
         # Transforms
-        self.s_tx = slider(-200,200,0)
-        self.s_ty = slider(-200,200,0)
-        self.s_tz = slider(-200,200,0)
+        self.s_tx = slider(-500,500,0)
+        self.s_ty = slider(-500,500,0)
+        self.s_tz = slider(-500,500,0)
         self.s_rx = slider(-1800,1800,0)
         self.s_ry = slider(-1800,1800,0)
         self.s_rz = slider(-1800,1800,0)
@@ -915,16 +926,17 @@ class Controller(QtCore.QObject):
         self.moving_color = "Green"
         self.coloring_enabled = True
         self._wire()
+        self._last_active_slider = None
 
     def _wire(self):
         self.ui.loadFixed.connect(self.on_load_fixed)
         self.ui.loadMoving.connect(self.on_load_moving)
-        self.ui.txChanged.connect(lambda v: self._update_transform())
-        self.ui.tyChanged.connect(lambda v: self._update_transform())
-        self.ui.tzChanged.connect(lambda v: self._update_transform())
-        self.ui.rxChanged.connect(lambda v: self._update_transform())
-        self.ui.ryChanged.connect(lambda v: self._update_transform())
-        self.ui.rzChanged.connect(lambda v: self._update_transform())
+        self.ui.txChanged.connect(lambda v: self._handle_slider_change("tx"))
+        self.ui.tyChanged.connect(lambda v: self._handle_slider_change("ty"))
+        self.ui.tzChanged.connect(lambda v: self._handle_slider_change("tz"))
+        self.ui.rxChanged.connect(lambda v: self._handle_slider_change("rx"))
+        self.ui.ryChanged.connect(lambda v: self._handle_slider_change("ry"))
+        self.ui.rzChanged.connect(lambda v: self._handle_slider_change("rz"))
         self.ui.opacityChanged.connect(lambda a: self._update_opacity(a))
         self.ui.resetRequested.connect(self.on_reset)
         self.ui.axialSliceChanged.connect(lambda i: self.refresh_slice("axial",i))
@@ -934,23 +946,42 @@ class Controller(QtCore.QObject):
         self.ui.moving_color_combo.currentTextChanged.connect(self._on_moving_color_changed)
         self.ui.coloring_checkbox.stateChanged.connect(self._on_coloring_checkbox_changed)
 
+    def _handle_slider_change(self, slider_name):
+        # If the active slider changes, bake the current transform
+        #if self._last_active_slider is not None and self._last_active_slider != slider_name:
+            # call bake transform once added here
+            # self.reset_transform_sliders()
+        self._last_active_slider = slider_name
+        self._update_transform()
+
+    def reset_transform_sliders(self):
+        for slider in [
+            self.ui.s_tx, self.ui.s_ty, self.ui.s_tz,
+            self.ui.s_rx, self.ui.s_ry, self.ui.s_rz
+        ]:
+            slider.blockSignals(True)
+            slider.setValue(0)
+            slider.blockSignals(False)
+
     def _update_transform(self):
-        # Get current slice indices from all views
+        # Use the current values of all three slice sliders to compute a 3D center for rotation
         axial_idx = self.ui.s_axial.value()
         coronal_idx = self.ui.s_coronal.value()
         sagittal_idx = self.ui.s_sagittal.value()
 
-        self.engine._tx = self.ui.s_tx.value()
-        self.engine._ty = self.ui.s_ty.value()
-        self.engine._tz = self.ui.s_tz.value()
-        self.engine._rx = self.ui.s_rx.value() / 10.0
-        self.engine._ry = self.ui.s_ry.value() / 10.0
-        self.engine._rz = self.ui.s_rz.value() / 10.0
+        # Set translation and rotation, then apply the transform ONCE with all current values
+        self.engine._tx = float(self.ui.s_tx.value())
+        self.engine._ty = float(self.ui.s_ty.value())
+        self.engine._tz = float(self.ui.s_tz.value())
+        self.engine._rx = float(self.ui.s_rx.value() / 10.0)
+        self.engine._ry = float(self.ui.s_ry.value() / 10.0)
+        self.engine._rz = float(self.ui.s_rz.value() / 10.0)
 
-        # Pass all three slice indices to the engine
-        self.engine._apply_transform(axial_idx, coronal_idx, sagittal_idx)
-
-        self.engine.set_interpolation_linear(False)
+        self.engine._apply_transform(
+            orientation="multi",
+            slice_idx=(axial_idx, coronal_idx, sagittal_idx)
+        )
+        engine.set_interpolation_linear(False)
         self._debounce_timer.start(self.DEBOUNCE_MS)
 
         # update matrix dialog if open
