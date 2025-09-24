@@ -170,7 +170,6 @@ class VTKEngine:
         self.fixed_img = None
 
 
-
     def cleanup_old_temp_dirs(self):
         cleanup_old_dicom_temp_dirs()
 
@@ -294,21 +293,50 @@ class VTKEngine:
         print(pre_transform)
         print("Pre-reg translation (mm):", t)
 
-        # --- Apply pre-transform in VTK ---
-        vtkmat = vtk.vtkMatrix4x4()
+        # --- BAKE pre-transform into the moving image immediately ---
+        # Create a reslice that applies pre_transform to the original moving image and
+        # writes the result into the fixed image geometry (so VTK will then treat the
+        # moving image as already aligned to the fixed geometry).
+        vtk_pre_mat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
-                vtkmat.SetElement(i,j, pre_transform[i,j])
+                vtk_pre_mat.SetElement(i,j, float(pre_transform[i,j]))
 
-        self.reslice3d.SetInputConnection(flip.GetOutputPort())
-        self.reslice3d.SetResliceAxes(vtkmat)
+        bake_reslice = vtk.vtkImageReslice()
+        bake_reslice.SetInputConnection(flip.GetOutputPort())
+        bake_reslice.SetResliceAxes(vtk_pre_mat)
+        bake_reslice.SetInterpolationModeToLinear()
+        # Configure output geometry to match fixed
+        if self.fixed_reader is not None:
+            fixed = self.fixed_reader.GetOutput()
+            fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
+            fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
+            bake_reslice.SetOutputSpacing(fixed.GetSpacing())
+            bake_reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
+            bake_reslice.SetOutputExtent(fixed.GetExtent())
+            bake_reslice.SetBackgroundLevel(self.reslice3d.GetBackgroundLevel())
+        bake_reslice.Update()
+
+        # Replace moving_reader with the baked reslice output; this means the moving image
+        # now *contains* the pre-registration transform in its voxel data and no pre_transform
+        # needs to be applied in subsequent transforms.
+        self.moving_reader = bake_reslice
+        # After baking, moving image geometry aligns with fixed, so update moving_matrix
+        self.moving_matrix = np.array(self.fixed_matrix, copy=True)
+        # Reset pre-transform since it's baked
+        self.pre_transform = np.eye(4)
+
+        # Now connect reslice3d input to the baked moving image and set identity axes
+        identity_mat = vtk.vtkMatrix4x4()
+        for i in range(4):
+            for j in range(4):
+                identity_mat.SetElement(i, j, float(np.eye(4)[i, j]))
+        self.reslice3d.SetInputConnection(self.moving_reader.GetOutputPort())
+        self.reslice3d.SetResliceAxes(identity_mat)
         self._sync_reslice_output_to_fixed()
         self._wire_blend()
 
         return True
-
-
-
 
 
 
@@ -542,6 +570,89 @@ class VTKEngine:
 
 
     # ---------------- Internal Transform Application ----------------
+    def _vtk_matrix_from_numpy(self, mat: np.ndarray) -> vtk.vtkMatrix4x4:
+        vtkmat = vtk.vtkMatrix4x4()
+        for i in range(4):
+            for j in range(4):
+                vtkmat.SetElement(i, j, float(mat[i, j]))
+        return vtkmat
+
+    def bake_user_transform_into_moving(self):
+        """Bake the current pre_transform + user_transform into the moving image data.
+
+        After this call:
+        - moving_reader will be replaced by a resampled image whose voxel data contains the
+          effect of the pre-registration and user transforms.
+        - pre_transform will be reset to identity.
+        - user transform state (internal) will be reset to identity (tx/ty/tz, rx/ry/rz -> 0)
+        - moving_matrix will be set to fixed_matrix so future transforms are relative to the
+          new baked image geometry.
+        """
+        if self.moving_reader is None or self.fixed_reader is None:
+            return
+
+        # Build numpy version of user transform
+        user_vtk_mat = self.user_transform.GetMatrix()
+        user_np = np.eye(4)
+        for i in range(4):
+            for j in range(4):
+                user_np[i, j] = user_vtk_mat.GetElement(i, j)
+
+        total = self.pre_transform @ user_np
+
+        vtk_total = self._vtk_matrix_from_numpy(total)
+
+        bake_reslice = vtk.vtkImageReslice()
+        bake_reslice.SetInputConnection(self.moving_reader.GetOutputPort())
+        bake_reslice.SetResliceAxes(vtk_total)
+        bake_reslice.SetInterpolationModeToLinear()
+
+        # Allow rotated volume to expand so it doesn’t get cut
+        bake_reslice.SetAutoCropOutput(True)
+        bake_reslice.Update()
+
+        # Configure output geometry to match fixed
+        fixed = self.fixed_reader.GetOutput()
+        fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
+        fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
+        #bake_reslice.SetOutputSpacing(fixed.GetSpacing())
+        #bake_reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
+        #bake_reslice.SetOutputExtent(fixed.GetExtent())
+
+        bake_reslice.Update()
+
+        # Reset background level based on baked data
+        img = bake_reslice.GetOutput()
+        scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
+        if scalars is not None and scalars.size > 0:
+            bake_reslice.SetBackgroundLevel(float(scalars.min()))
+
+        # Replace pipeline
+        self.moving_reader = bake_reslice
+        # now moving voxel data is in fixed space; update matrices
+        self.moving_matrix = np.array(self.fixed_matrix, copy=True)
+        self.pre_transform = np.eye(4)
+
+        # Reset user transform state
+        self.user_transform.Identity()
+        self._tx = self._ty = self._tz = 0.0
+        self._rx = self._ry = self._rz = 0.0
+        self.sitk_matrix = np.eye(4, dtype=np.float64)
+
+        # Re-attach reslice3d to the baked image and use identity reslice axes (user transforms will now
+        # be applied on top of the baked image only)
+        identity_mat = self._vtk_matrix_from_numpy(np.eye(4))
+        self.reslice3d.SetInputConnection(self.moving_reader.GetOutputPort())
+        self.reslice3d.SetResliceAxes(identity_mat)
+
+        self._sync_reslice_output_to_fixed()
+        self._wire_blend()
+        self._blend_dirty = True
+
+
+
+
+
     def _apply_transform(self, orientation=None, slice_idx=None): 
         if not self.fixed_reader or not self.moving_reader: 
             return
@@ -564,16 +675,7 @@ class VTKEngine:
                 origin[1] + y * spacing[1],
                 origin[2] + z * spacing[2]
             ])
-            # Offset center by pre-transform translation
-            pre_t = vtk.vtkMatrix4x4()
-            for i in range(4):
-                for j in range(4):
-                    pre_t.SetElement(i, j, self.pre_transform[i, j])
-            tx = pre_t.GetElement(0, 3)
-            ty = pre_t.GetElement(1, 3)
-            tz = pre_t.GetElement(2, 3)
-            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
-            center += offset_voxels * spacing
+            # Note: pre_transform was baked into the moving image in load_moving, so no offset is applied here
         elif orientation is not None and slice_idx is not None:
             # Fallback to old behavior for single orientation
             if orientation == VTKEngine.ORI_AXIAL:
@@ -598,22 +700,8 @@ class VTKEngine:
                     origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
                 ])
 
-            # Offset center by pre-transform translation
-            pre_t = vtk.vtkMatrix4x4()
-            for i in range(4):
-                for j in range(4):
-                    pre_t.SetElement(i, j, self.pre_transform[i, j])
-
-            tx = pre_t.GetElement(0, 3)
-            ty = pre_t.GetElement(1, 3)
-            tz = pre_t.GetElement(2, 3)
-
-            offset_voxels = np.array([tx / spacing[0], ty / spacing[1], tz / spacing[2]])
-            center += offset_voxels * spacing
-        
         ras_center = -self.moving_matrix[0:3,3]
 
-        
         # ---------------- User transform only ---------------- 
         user_t = vtk.vtkTransform() 
         user_t.PostMultiply() 
@@ -631,16 +719,12 @@ class VTKEngine:
         # Move volume back 
         user_t.Translate(center) 
 
-        # ---------------- Combined transform for reslice ---------------- 
+        # ---------------- Combined transform for reslice (ONLY user transform)
         final_t = vtk.vtkTransform() 
         final_t.PostMultiply() 
-        pre_vtk_mat = vtk.vtkMatrix4x4() 
-        for i in range(4): 
-            for j in range(4): 
-                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j]) 
 
-        final_t.Concatenate(pre_vtk_mat) # pre-registration 
-        final_t.Concatenate(user_t) # user transform 
+        # Since pre-registration is baked into the moving image, do NOT concatenate pre_transform here.
+        final_t.Concatenate(user_t) # user transform only
         self.transform.DeepCopy(final_t) 
         self.user_transform.DeepCopy(user_t) 
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
@@ -937,10 +1021,13 @@ class Controller(QtCore.QObject):
         self.ui.coloring_checkbox.stateChanged.connect(self._on_coloring_checkbox_changed)
 
     def _handle_slider_change(self, slider_name):
-        # If the active slider changes, bake the current transform
-        #if self._last_active_slider is not None and self._last_active_slider != slider_name:
-            # call bake transform once added here
-            # self.reset_transform_sliders()
+        # If the active slider changes, bake the current transform into the moving image.
+        if self._last_active_slider is not None and self._last_active_slider != slider_name:
+            # Bake current transforms into the moving image so VTK treats them as part of the voxel data.
+            self.engine.bake_user_transform_into_moving()
+            # Reset the on-screen transform sliders because their effect is now baked.
+            self.reset_transform_sliders()
+
         self._last_active_slider = slider_name
         self._update_transform()
 
