@@ -170,6 +170,9 @@ class VTKEngine:
         self.sitk_transform = sitk.Euler3DTransform()
         self.sitk_matrix = np.eye(4, dtype=np.float64)  # Latest SITK matrix
         self.fixed_img = None
+        self._accumulated_pivot_offset = np.array([0.0, 0.0, 0.0])  # Track cumulative pivot shifts
+        self._last_pivot_point = None  # Track the last pivot used in world coordinates
+        self._bake_count = 0  # For debugging
 
 
     def cleanup_old_temp_dirs(self):
@@ -295,10 +298,20 @@ class VTKEngine:
         print(pre_transform)
         print("Pre-reg translation (mm):", t)
 
+        # === INITIALIZE PIVOT TRACKING BEFORE BAKING ===
+        # Initialize pivot tracking for new moving image
+        self._accumulated_pivot_offset = np.array([0.0, 0.0, 0.0])
+        self._last_pivot_point = None
+        self._bake_count = 0
+        
+        # Get the initial pivot point (volume center before any transforms)
+        if self.fixed_reader is not None:
+            initial_pivot = np.array(self.fixed_reader.GetOutput().GetCenter())
+            self._last_pivot_point = np.copy(initial_pivot)
+            print(f"[LOAD_MOVING] Initial pivot point: {initial_pivot}")
+
         # --- BAKE pre-transform into the moving image immediately ---
-        # Create a reslice that applies pre_transform to the original moving image and
-        # writes the result into the fixed image geometry (so VTK will then treat the
-        # moving image as already aligned to the fixed geometry).
+        # This is essentially the first "bake" operation, so we need to track it
         vtk_pre_mat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
@@ -308,25 +321,33 @@ class VTKEngine:
         bake_reslice.SetInputConnection(flip.GetOutputPort())
         bake_reslice.SetResliceAxes(vtk_pre_mat)
         bake_reslice.SetInterpolationModeToLinear()
+        
         # Configure output geometry to match fixed
         if self.fixed_reader is not None:
             fixed = self.fixed_reader.GetOutput()
             fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
             fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
-            #bake_reslice.SetOutputSpacing(fixed.GetSpacing())
-            #bake_reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
-            #bake_reslice.SetOutputExtent(fixed.GetExtent())
             bake_reslice.SetBackgroundLevel(self.reslice3d.GetBackgroundLevel())
         bake_reslice.Update()
 
-        # Replace moving_reader with the baked reslice output; this means the moving image
-        # now *contains* the pre-registration transform in its voxel data and no pre_transform
-        # needs to be applied in subsequent transforms.
+        # Replace moving_reader with the baked reslice output
         self.moving_reader = bake_reslice
+        
         # After baking, moving image geometry aligns with fixed, so update moving_matrix
         self.moving_matrix = np.array(self.fixed_matrix, copy=True)
+        
         # Reset pre-transform since it's baked
         self.pre_transform = np.eye(4)
+
+        # === TRACK THE PRE-REGISTRATION BAKE ===
+        # This pre-registration bake doesn't change the pivot location because both images
+        # are now in the same coordinate system, but we should increment the bake count
+        # to indicate that a bake operation occurred
+        self._bake_count += 1
+        print(f"[LOAD_MOVING] Pre-registration baked (bake count: {self._bake_count})")
+        
+        # Add the pre-transform to the transform stack to track the baking history
+        self._transform_stack.append(pre_transform)
 
         # Now connect reslice3d input to the baked moving image and set identity axes
         identity_mat = vtk.vtkMatrix4x4()
@@ -352,10 +373,18 @@ class VTKEngine:
         self._apply_transform(orientation, slice_idx, pivot_mode="current_slice" if orientation and slice_idx is not None else "dataset_center")
 
     def reset_transform(self):
+        """Enhanced reset that also clears pivot tracking."""
+        # Reset transform parameters
         self._tx = self._ty = self._tz = 0.0
         self._rx = self._ry = self._rz = 0.0
         self.transform.Identity()
         self._blend_dirty = True
+        
+        # Reset pivot tracking
+        self._accumulated_pivot_offset = np.array([0.0, 0.0, 0.0])
+        self._last_pivot_point = None
+        self._bake_count = 0
+        
         self._apply_transform()
 
     def set_opacity(self, alpha: float):
@@ -490,90 +519,114 @@ class VTKEngine:
         qimg = qimg.copy()
         return aspect_ratio_correct(qimg, h, w, orientation)
 
+    def _get_current_pivot_from_apply_transform_logic(self, orientation=None, slice_idx=None):
+        """Extract the pivot calculation that's already in your _apply_transform method."""
+        if not self.fixed_reader:
+            return np.array([0.0, 0.0, 0.0])
+            
+        img = self.fixed_reader.GetOutput()
+        center = np.array(img.GetCenter())  # Default fallback
+
+        extent = img.GetExtent()
+        spacing = img.GetSpacing()
+        origin = img.GetOrigin()
+
+        # This mirrors the exact logic from your _apply_transform method
+        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
+            axial_idx, coronal_idx, sagittal_idx = slice_idx
+            # Compute the center in world coordinates using all three indices
+            x = int(np.clip(sagittal_idx, extent[0], extent[1]))
+            y = int(np.clip(coronal_idx, extent[2], extent[3]))
+            z = int(np.clip(axial_idx, extent[4], extent[5]))
+            center = np.array([
+                origin[0] + x * spacing[0],
+                origin[1] + y * spacing[1],
+                origin[2] + z * spacing[2]
+            ])
+        elif orientation is not None and slice_idx is not None:
+            # Fallback to old behavior for single orientation (from your existing code)
+            if orientation == VTKEngine.ORI_AXIAL:
+                z = int(np.clip(slice_idx, extent[4], extent[5]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + z * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_CORONAL:
+                y = int(np.clip(slice_idx, extent[2], extent[3]))
+                center = np.array([
+                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
+                    origin[1] + y * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+            elif orientation == VTKEngine.ORI_SAGITTAL:
+                x = int(np.clip(slice_idx, extent[0], extent[1]))
+                center = np.array([
+                    origin[0] + x * spacing[0],
+                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
+                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
+                ])
+
+        return center
 
     def _update_sitk_transform(self, orientation=None, slice_idx=None):
+        """Enhanced version that accounts for accumulated pivot offsets."""
         if not self.fixed_reader:
             return
 
-        # Step 0: Get DICOM first slice IPP
+        # Step 0: Get DICOM first slice IPP and origin alignment
         dicom_ipp0 = get_first_slice_ipp(self.fixed_dir)
         sitk_origin = np.array(self.fixed_img.GetOrigin())
-        origin_shift = dicom_ipp0 - sitk_origin  # shift to align SITK origin with DICOM IPP
+        origin_shift = dicom_ipp0 - sitk_origin[:3]
 
-        # Step 1: Default pivot = volume center
-        voxel = np.array(self.fixed_img.GetSize()) / 2.0
+        # Step 1: Compute current pivot in the ORIGINAL coordinate system
+        current_pivot = self._get_current_pivot_from_apply_transform_logic(orientation, slice_idx)
+        
+        # Step 2: Apply accumulated pivot offset from previous bakes
+        # This accounts for the fact that the moving image has been transformed
+        # but we're still calculating pivots in the fixed image space
+        effective_pivot = current_pivot + self._accumulated_pivot_offset
+        
+        print(f"[SITK] Current pivot: {current_pivot}")
+        print(f"[SITK] Accumulated offset: {self._accumulated_pivot_offset}")
+        print(f"[SITK] Effective pivot: {effective_pivot}")
 
-        # Step 2: Override pivot if slice info provided
-        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
-            axial_idx, coronal_idx, sagittal_idx = slice_idx
-            # Use all three indices to compute the center voxel
-            voxel = np.array([
-                sagittal_idx,
-                coronal_idx,
-                axial_idx
-            ])
-        elif orientation is not None and slice_idx is not None:
-            if orientation == VTKEngine.ORI_AXIAL:
-                voxel = np.array([
-                    self.fixed_img.GetWidth() // 2,
-                    self.fixed_img.GetHeight() // 2,
-                    slice_idx
-                ])
-            elif orientation == VTKEngine.ORI_CORONAL:
-                voxel = np.array([
-                    self.fixed_img.GetWidth() // 2,
-                    slice_idx,
-                    self.fixed_img.GetDepth() // 2
-                ])
-            elif orientation == VTKEngine.ORI_SAGITTAL:
-                voxel = np.array([
-                    slice_idx,
-                    self.fixed_img.GetHeight() // 2,
-                    self.fixed_img.GetDepth() // 2
-                ])
+        # Step 3: Convert to SITK voxel coordinates for center calculation
+        # (This is for the SITK transform center parameter)
+        center = effective_pivot + origin_shift
 
-        # Step 3: Convert voxel → physical point in DICOM space
-        center = np.array(self.fixed_img.TransformIndexToPhysicalPoint([int(v) for v in voxel]))
-
-        # Apply DICOM origin shift
-        center += origin_shift
-
-        # Step 5: Build rotation matrix (Rx, Ry, Rz in radians)
+        # Step 4: Build rotation matrix
         rx, ry, rz = np.deg2rad([self._rx, self._ry, -self._rz])
 
         Rx = np.array([[1, 0, 0],
-                    [0, np.cos(rx), -np.sin(rx)],
-                    [0, np.sin(rx), np.cos(rx)]])
+                      [0, np.cos(rx), -np.sin(rx)],
+                      [0, np.sin(rx), np.cos(rx)]])
         Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
-                    [0, 1, 0],
-                    [-np.sin(ry), 0, np.cos(ry)]])
+                      [0, 1, 0],
+                      [-np.sin(ry), 0, np.cos(ry)]])
         Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                    [np.sin(rz), np.cos(rz), 0],
-                    [0, 0, 1]])
+                      [np.sin(rz), np.cos(rz), 0],
+                      [0, 0, 1]])
 
-        R = Rz @ Ry @ Rx  # ITK order: Rz * Ry * Rx
+        R = Rz @ Ry @ Rx
 
-        # Step 6: Bake pivot into translation (match VTK _apply_transform)
-        c = np.array(center)                    # pivot in physical space
-        user_t = np.array([-self._tx, -self._ty, self._tz])  # world XYZ translation
-
+        # Step 5: Bake pivot into translation
+        c = np.array(center)
+        user_t = np.array([-self._tx, -self._ty, self._tz])
+        
         baked_t = R @ (-c) + c + user_t
 
-        # Step 7: Build user transform 4x4
-        user_mat = np.eye(4, dtype=np.float64)
-        user_mat[:3, :3] = R
-        user_mat[:3, 3] = baked_t
-
-        # Step 8: Stack all baked transforms (pre, user, etc.)
-        final_mat = np.eye(4, dtype=np.float64)
-        for t in self._transform_stack:
-            final_mat = t @ final_mat
-        final_mat = user_mat @ final_mat
-
-        # Step 9: Convert LPS → RAS (for VTK/Slicer comparison)
+        # Step 6: Build final 4x4 matrix
+        mat = np.eye(4, dtype=np.float64)
+        mat[:3, :3] = R
+        mat[:3, 3] = baked_t
+        
+        # Step 7: Convert LPS → RAS
         LPS_to_RAS = np.diag([-1, -1, 1, 1])
-        ras_matrix = LPS_to_RAS @ final_mat @ LPS_to_RAS
+        ras_matrix = LPS_to_RAS @ mat @ LPS_to_RAS
+        
         self.sitk_matrix = ras_matrix
+
 
 
     # ---------------- Internal Transform Application ----------------
@@ -584,22 +637,29 @@ class VTKEngine:
                 vtkmat.SetElement(i, j, float(mat[i, j]))
         return vtkmat
 
-    def bake_user_transform_into_moving(self):
-        """Bake the current pre_transform + user_transform into the moving image data.
-
-        After this call:
-        - moving_reader will be replaced by a resampled image whose voxel data contains the
-          effect of the pre-registration and user transforms.
-        - pre_transform will be reset to identity.
-        - user transform state (internal) will be reset to identity (tx/ty/tz, rx/ry/rz -> 0)
-        - moving_matrix will be set to fixed_matrix so future transforms are relative to the
-          new baked image geometry.
-        - The transform stack will be updated.
-        """
+    def bake_user_transform_into_moving(self, current_slice_indices=None):
+        """Enhanced version that tracks pivot changes."""
         if self.moving_reader is None or self.fixed_reader is None:
             return
 
-        # Build numpy version of user transform
+        # Get current pivot before baking using your existing logic
+        if current_slice_indices is not None:
+            current_pivot = self._get_current_pivot_from_apply_transform_logic("multi", current_slice_indices)
+        else:
+            # Fallback to volume center if no slice indices provided
+            current_pivot = np.array(self.fixed_reader.GetOutput().GetCenter())
+
+        # If we have a previous pivot, calculate the offset
+        if self._last_pivot_point is not None:
+            pivot_shift = current_pivot - self._last_pivot_point
+            self._accumulated_pivot_offset += pivot_shift
+            print(f"[BAKE {self._bake_count}] Pivot shift: {pivot_shift}")
+            print(f"[BAKE {self._bake_count}] Accumulated pivot offset: {self._accumulated_pivot_offset}")
+
+        # Store current pivot as the new "last pivot"
+        self._last_pivot_point = np.copy(current_pivot)
+        
+        # ... rest of existing bake_user_transform_into_moving code ...
         user_vtk_mat = self.user_transform.GetMatrix()
         user_np = np.eye(4)
         for i in range(4):
@@ -607,32 +667,21 @@ class VTKEngine:
                 user_np[i, j] = user_vtk_mat.GetElement(i, j)
 
         total = self.pre_transform @ user_np
-
-        # Add to transform stack
         self._transform_stack.append(total)
-
         vtk_total = self._vtk_matrix_from_numpy(total)
 
         bake_reslice = vtk.vtkImageReslice()
         bake_reslice.SetInputConnection(self.moving_reader.GetOutputPort())
         bake_reslice.SetResliceAxes(vtk_total)
         bake_reslice.SetInterpolationModeToLinear()
-
-        # Allow rotated volume to expand so it doesn’t get cut
         bake_reslice.SetAutoCropOutput(True)
         bake_reslice.Update()
 
-        # Configure output geometry to match fixed
+        # Configure output geometry
         fixed = self.fixed_reader.GetOutput()
-        fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
-        fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
-        #bake_reslice.SetOutputSpacing(fixed.GetSpacing())
-        #bake_reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
-        #bake_reslice.SetOutputExtent(fixed.GetExtent())
-
         bake_reslice.Update()
 
-        # Reset background level based on baked data
+        # Reset background level
         img = bake_reslice.GetOutput()
         scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
         if scalars is not None and scalars.size > 0:
@@ -640,7 +689,6 @@ class VTKEngine:
 
         # Replace pipeline
         self.moving_reader = bake_reslice
-        # now moving voxel data is in fixed space; update matrices
         self.moving_matrix = np.array(self.fixed_matrix, copy=True)
         self.pre_transform = np.eye(4)
 
@@ -650,8 +698,7 @@ class VTKEngine:
         self._rx = self._ry = self._rz = 0.0
         self.sitk_matrix = np.eye(4, dtype=np.float64)
 
-        # Re-attach reslice3d to the baked image and use identity reslice axes (user transforms will now
-        # be applied on top of the baked image only)
+        # Re-attach reslice3d
         identity_mat = self._vtk_matrix_from_numpy(np.eye(4))
         self.reslice3d.SetInputConnection(self.moving_reader.GetOutputPort())
         self.reslice3d.SetResliceAxes(identity_mat)
@@ -659,6 +706,8 @@ class VTKEngine:
         self._sync_reslice_output_to_fixed()
         self._wire_blend()
         self._blend_dirty = True
+        
+        self._bake_count += 1
 
 
 
@@ -741,8 +790,18 @@ class VTKEngine:
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
         self.reslice3d.Modified() 
         self._update_sitk_transform(orientation, slice_idx)
+        self.debug_pivot_state()
         self._blend_dirty = True 
 
+    def debug_pivot_state(self):
+        """Print current pivot tracking state."""
+        print(f"=== PIVOT DEBUG STATE ===")
+        print(f"Accumulated pivot offset: {self._accumulated_pivot_offset}")
+        print(f"Last pivot point: {self._last_pivot_point}")
+        print(f"Bake count: {self._bake_count}")
+        print(f"Current transform params: tx={self._tx}, ty={self._ty}, tz={self._tz}")
+        print(f"Current rotation params: rx={self._rx}, ry={self._ry}, rz={self._rz}")
+        print(f"==========================")
 
 
     # ---------------- Pipeline Utilities ----------------
@@ -1034,8 +1093,13 @@ class Controller(QtCore.QObject):
     def _handle_slider_change(self, slider_name):
         # If the active slider changes, bake the current transform into the moving image.
         if self._last_active_slider is not None and self._last_active_slider != slider_name:
+            current_indices = (
+                self.ui.s_axial.value(),
+                self.ui.s_coronal.value(), 
+                self.ui.s_sagittal.value()
+            )
             # Bake current transforms into the moving image so VTK treats them as part of the voxel data.
-            self.engine.bake_user_transform_into_moving()
+            self.engine.bake_user_transform_into_moving(current_indices)
             # Reset the on-screen transform sliders because their effect is now baked.
             self.reset_transform_sliders()
 

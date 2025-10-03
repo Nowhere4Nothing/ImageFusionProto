@@ -167,7 +167,7 @@ class VTKEngine:
         # SimpleITK placeholder transforms
         self.sitk_transform = sitk.Euler3DTransform()
         self.sitk_matrix = np.eye(4, dtype=np.float64)  # Latest SITK matrix
-        self.fixed_img = None
+
 
 
     def cleanup_old_temp_dirs(self):
@@ -231,12 +231,6 @@ class VTKEngine:
 
         self._wire_blend()
         self._sync_reslice_output_to_fixed()
-
-        # Load fixed as SITK image (with proper DICOM geometry)
-        reader = sitk.ImageSeriesReader()
-        dicom_names = reader.GetGDCMSeriesFileNames(self.fixed_dir)
-        reader.SetFileNames(dicom_names)
-        self.fixed_img = reader.Execute()
         return True
 
 
@@ -293,47 +287,21 @@ class VTKEngine:
         print(pre_transform)
         print("Pre-reg translation (mm):", t)
 
-        # --- BAKE pre-transform into the moving image immediately ---
-        # Create a reslice that applies pre_transform to the original moving image and
-        # writes the result into the fixed image geometry (so VTK will then treat the
-        # moving image as already aligned to the fixed geometry).
-        vtk_pre_mat = vtk.vtkMatrix4x4()
+        # --- Apply pre-transform in VTK ---
+        vtkmat = vtk.vtkMatrix4x4()
         for i in range(4):
             for j in range(4):
-                vtk_pre_mat.SetElement(i,j, float(pre_transform[i,j]))
+                vtkmat.SetElement(i,j, pre_transform[i,j])
 
-        bake_reslice = vtk.vtkImageReslice()
-        bake_reslice.SetInputConnection(flip.GetOutputPort())
-        bake_reslice.SetResliceAxes(vtk_pre_mat)
-        bake_reslice.SetInterpolationModeToLinear()
-        # Configure output geometry to match fixed
-        if self.fixed_reader is not None:
-            fixed = self.fixed_reader.GetOutput()
-            fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
-            fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
-            bake_reslice.SetBackgroundLevel(self.reslice3d.GetBackgroundLevel())
-        bake_reslice.Update()
-
-        # Replace moving_reader with the baked reslice output; this means the moving image
-        # now *contains* the pre-registration transform in its voxel data and no pre_transform
-        # needs to be applied in subsequent transforms.
-        self.moving_reader = bake_reslice
-        # After baking, moving image geometry aligns with fixed, so update moving_matrix
-        self.moving_matrix = np.array(self.fixed_matrix, copy=True)
-        # Reset pre-transform since it's baked
-        self.pre_transform = np.eye(4)
-
-        # Now connect reslice3d input to the baked moving image and set identity axes
-        identity_mat = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                identity_mat.SetElement(i, j, float(np.eye(4)[i, j]))
-        self.reslice3d.SetInputConnection(self.moving_reader.GetOutputPort())
-        self.reslice3d.SetResliceAxes(identity_mat)
+        self.reslice3d.SetInputConnection(flip.GetOutputPort())
+        self.reslice3d.SetResliceAxes(vtkmat)
         self._sync_reslice_output_to_fixed()
         self._wire_blend()
 
         return True
+
+
+
 
 
 
@@ -486,247 +454,89 @@ class VTKEngine:
         return aspect_ratio_correct(qimg, h, w, orientation)
 
 
-    def _update_sitk_transform(self, orientation=None, slice_idx=None):
-        if not self.fixed_reader:
-            return
+    def _update_sitk_transform(self):
+        # Build raw rotation matrix from Euler angles (Z-Y-X order)
+        rx, ry, rz = np.deg2rad([self._rx, self._ry, self._rz])
+        cx, cy, cz = np.cos([rx, ry, rz])
+        sx, sy, sz = np.sin([rx, ry, rz])
 
-        # Step 0: Get DICOM first slice IPP
-        dicom_ipp0 = get_first_slice_ipp(self.fixed_dir)
-        sitk_origin = np.array(self.fixed_img.GetOrigin())
-        origin_shift = dicom_ipp0 - sitk_origin  # shift to align SITK origin with DICOM IPP
+        # Compose rotation matrix R = Rz * Ry * Rx
+        R = np.array([
+            [cz*cy, cz*sy*sx - sz*cx, cz*sy*cx + sz*sx],
+            [sz*cy, sz*sy*sx + cz*cx, sz*sy*cx - cz*sx],
+            [-sy,   cy*sx,             cy*cx]
+        ])
 
-        # Step 1: Default pivot = volume center
-        voxel = np.array(self.fixed_img.GetSize()) / 2.0
+        # Raw translation vector (input)
+        t_vec = np.array([-self._tx, -self._ty, self._tz])
 
-        # Step 2: Override pivot if slice info provided
-        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
-            axial_idx, coronal_idx, sagittal_idx = slice_idx
-            # Use all three indices to compute the center voxel
-            voxel = np.array([
-                sagittal_idx,
-                coronal_idx,
-                axial_idx
-            ])
-        elif orientation is not None and slice_idx is not None:
-            if orientation == VTKEngine.ORI_AXIAL:
-                voxel = np.array([
-                    self.fixed_img.GetWidth() // 2,
-                    self.fixed_img.GetHeight() // 2,
-                    slice_idx
-                ])
-            elif orientation == VTKEngine.ORI_CORONAL:
-                voxel = np.array([
-                    self.fixed_img.GetWidth() // 2,
-                    slice_idx,
-                    self.fixed_img.GetDepth() // 2
-                ])
-            elif orientation == VTKEngine.ORI_SAGITTAL:
-                voxel = np.array([
-                    slice_idx,
-                    self.fixed_img.GetHeight() // 2,
-                    self.fixed_img.GetDepth() // 2
-                ])
+        # Build 4x4 homogeneous matrix in LPS
+        mat_lps = np.eye(4)
+        mat_lps[:3, :3] = R
+        mat_lps[:3, 3] = t_vec
 
-        # Step 3: Convert voxel → physical point in DICOM space
-        center = np.array(self.fixed_img.TransformIndexToPhysicalPoint([int(v) for v in voxel]))
+        # Convert to RAS if needed
+        LPS_TO_RAS = np.diag([-1.0, -1.0, 1.0, 1.0])
+        mat_ras = LPS_TO_RAS @ mat_lps @ LPS_TO_RAS
 
-        # Apply DICOM origin shift
-        center += origin_shift
+        # --- Convert LPS matrix to SITK AffineTransform ---
+        t_sitk = sitk.AffineTransform(3)
+        t_sitk.SetMatrix(R.flatten().tolist())      # 3x3 rotation part
+        t_sitk.SetTranslation(t_vec.tolist())       # translation part
+        # Note: no need to set center, since translation is independent
 
-        # Step 5: Build rotation matrix (Rx, Ry, Rz in radians)
-        rx, ry, rz = np.deg2rad([self._rx, self._ry, -self._rz])
+        # Store
+        self.sitk_matrix = mat_lps      # LPS matrix for Platipy ROI transfer
+        self.sitk_matrix_ras = mat_ras  # optional RAS version
+        self.sitktransform = t_sitk     # SimpleITK transform for efficient application
 
-        Rx = np.array([[1, 0, 0],
-                    [0, np.cos(rx), -np.sin(rx)],
-                    [0, np.sin(rx), np.cos(rx)]])
-        Ry = np.array([[np.cos(ry), 0, np.sin(ry)],
-                    [0, 1, 0],
-                    [-np.sin(ry), 0, np.cos(ry)]])
-        Rz = np.array([[np.cos(rz), -np.sin(rz), 0],
-                    [np.sin(rz), np.cos(rz), 0],
-                    [0, 0, 1]])
 
-        R = Rz @ Ry @ Rx  # ITK order: Rz * Ry * Rx
+        print("SITK Transform (LPS):", t_sitk)
 
-        # Step 6: Bake pivot into translation (match VTK _apply_transform)
-        c = np.array(center)                    # pivot in physical space
-        user_t = np.array([-self._tx, -self._ty, self._tz])  # world XYZ translation
-
-        baked_t = R @ (-c) + c + user_t
-
-        # Step 7: Build final 4x4
-        mat = np.eye(4, dtype=np.float64)
-        mat[:3, :3] = R
-        mat[:3, 3] = baked_t
-        self.sitk_matrix = mat
-
-        # Step 8: Convert LPS → RAS (for VTK/Slicer comparison)
-        LPS_to_RAS = np.diag([-1, -1, 1, 1])
-        ras_matrix = LPS_to_RAS @ self.sitk_matrix @ LPS_to_RAS
-        self.sitk_matrix = ras_matrix
+        print("SITK Transform Matrix (LPS):")
+        print(mat_lps)
 
 
     # ---------------- Internal Transform Application ----------------
-    def _vtk_matrix_from_numpy(self, mat: np.ndarray) -> vtk.vtkMatrix4x4:
-        vtkmat = vtk.vtkMatrix4x4()
-        for i in range(4):
-            for j in range(4):
-                vtkmat.SetElement(i, j, float(mat[i, j]))
-        return vtkmat
-
-    def bake_user_transform_into_moving(self):
-        """Bake the current pre_transform + user_transform into the moving image data.
-
-        After this call:
-        - moving_reader will be replaced by a resampled image whose voxel data contains the
-          effect of the pre-registration and user transforms.
-        - pre_transform will be reset to identity.
-        - user transform state (internal) will be reset to identity (tx/ty/tz, rx/ry/rz -> 0)
-        - moving_matrix will be set to fixed_matrix so future transforms are relative to the
-          new baked image geometry.
-        """
-        if self.moving_reader is None or self.fixed_reader is None:
-            return
-
-        # Build numpy version of user transform
-        user_vtk_mat = self.user_transform.GetMatrix()
-        user_np = np.eye(4)
-        for i in range(4):
-            for j in range(4):
-                user_np[i, j] = user_vtk_mat.GetElement(i, j)
-
-        total = self.pre_transform @ user_np
-
-        vtk_total = self._vtk_matrix_from_numpy(total)
-
-        bake_reslice = vtk.vtkImageReslice()
-        bake_reslice.SetInputConnection(self.moving_reader.GetOutputPort())
-        bake_reslice.SetResliceAxes(vtk_total)
-        bake_reslice.SetInterpolationModeToLinear()
-
-        # Allow rotated volume to expand so it doesn’t get cut
-        bake_reslice.SetAutoCropOutput(True)
-        bake_reslice.Update()
-
-        # Configure output geometry to match fixed
-        fixed = self.fixed_reader.GetOutput()
-        fixed_origin_lps = np.array(fixed.GetOrigin(), dtype=float)
-        fixed_origin_ras = lps_point_to_ras(fixed_origin_lps)
-        #bake_reslice.SetOutputSpacing(fixed.GetSpacing())
-        #bake_reslice.SetOutputOrigin(tuple(float(x) for x in fixed_origin_ras))
-        #bake_reslice.SetOutputExtent(fixed.GetExtent())
-
-        bake_reslice.Update()
-
-        # Reset background level based on baked data
-        img = bake_reslice.GetOutput()
-        scalars = numpy_support.vtk_to_numpy(img.GetPointData().GetScalars())
-        if scalars is not None and scalars.size > 0:
-            bake_reslice.SetBackgroundLevel(float(scalars.min()))
-
-        # Replace pipeline
-        self.moving_reader = bake_reslice
-        # now moving voxel data is in fixed space; update matrices
-        self.moving_matrix = np.array(self.fixed_matrix, copy=True)
-        self.pre_transform = np.eye(4)
-
-        # Reset user transform state
-        self.user_transform.Identity()
-        self._tx = self._ty = self._tz = 0.0
-        self._rx = self._ry = self._rz = 0.0
-        self.sitk_matrix = np.eye(4, dtype=np.float64)
-
-        # Re-attach reslice3d to the baked image and use identity reslice axes (user transforms will now
-        # be applied on top of the baked image only)
-        identity_mat = self._vtk_matrix_from_numpy(np.eye(4))
-        self.reslice3d.SetInputConnection(self.moving_reader.GetOutputPort())
-        self.reslice3d.SetResliceAxes(identity_mat)
-
-        self._sync_reslice_output_to_fixed()
-        self._wire_blend()
-        self._blend_dirty = True
-
-
-
-
-
     def _apply_transform(self, orientation=None, slice_idx=None): 
         if not self.fixed_reader or not self.moving_reader: 
-            return
-        img = self.fixed_reader.GetOutput()
-        center = np.array(img.GetCenter())
+            return 
 
-        extent = img.GetExtent()
-        spacing = img.GetSpacing()
-        origin = img.GetOrigin()
-
-        # If orientation is "multi" and slice_idx is a tuple, use all three indices to compute a 3D center
-        if orientation == "multi" and isinstance(slice_idx, tuple) and len(slice_idx) == 3:
-            axial_idx, coronal_idx, sagittal_idx = slice_idx
-            # Compute the center in world coordinates using all three indices
-            x = int(np.clip(sagittal_idx, extent[0], extent[1]))
-            y = int(np.clip(coronal_idx, extent[2], extent[3]))
-            z = int(np.clip(axial_idx, extent[4], extent[5]))
-            center = np.array([
-                origin[0] + x * spacing[0],
-                origin[1] + y * spacing[1],
-                origin[2] + z * spacing[2]
-            ])
-            # Note: pre_transform was baked into the moving image in load_moving, so no offset is applied here
-        elif orientation is not None and slice_idx is not None:
-            # Fallback to old behavior for single orientation
-            if orientation == VTKEngine.ORI_AXIAL:
-                z = int(np.clip(slice_idx, extent[4], extent[5]))
-                center = np.array([
-                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
-                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
-                    origin[2] + z * spacing[2]
-                ])
-            elif orientation == VTKEngine.ORI_CORONAL:
-                y = int(np.clip(slice_idx, extent[2], extent[3]))
-                center = np.array([
-                    origin[0] + 0.5 * (extent[0] + extent[1]) * spacing[0],
-                    origin[1] + y * spacing[1],
-                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
-                ])
-            elif orientation == VTKEngine.ORI_SAGITTAL:
-                x = int(np.clip(slice_idx, extent[0], extent[1]))
-                center = np.array([
-                    origin[0] + x * spacing[0],
-                    origin[1] + 0.5 * (extent[2] + extent[3]) * spacing[1],
-                    origin[2] + 0.5 * (extent[4] + extent[5]) * spacing[2]
-                ])
-
-        ras_center = -self.moving_matrix[0:3,3]
-
-        # ---------------- User transform only ---------------- 
+        # ---------------- User transform applied to pipeline ---------------- 
         user_t = vtk.vtkTransform() 
         user_t.PostMultiply() 
 
-        # Apply user translation 
-        user_t.Translate(self._tx, self._ty, self._tz) 
+        # Move volume to origin for rotation
+        user_t.Translate(-self.moving_matrix[0:3,3])
 
-        # Move volume to origin for rotation 
-        user_t.Translate(-center) 
-        # Apply user rotations 
+        # Apply world-based translation first
+        user_t.Translate(self._tx, self._ty, self._tz)
+
+        # Apply rotations
         user_t.RotateX(self._rx) 
         user_t.RotateY(self._ry) 
         user_t.RotateZ(self._rz) 
-        
-        # Move volume back 
-        user_t.Translate(center) 
 
-        # ---------------- Combined transform for reslice (ONLY user transform)
+        # Move volume back
+        user_t.Translate(self.moving_matrix[0:3,3]) 
+
+        # ---------------- Combined transform for reslice ---------------- 
         final_t = vtk.vtkTransform() 
         final_t.PostMultiply() 
 
-        # Since pre-registration is baked into the moving image, do NOT concatenate pre_transform here.
-        final_t.Concatenate(user_t) # user transform only
+        pre_vtk_mat = vtk.vtkMatrix4x4() 
+        for i in range(4): 
+            for j in range(4): 
+                pre_vtk_mat.SetElement(i, j, self.pre_transform[i, j]) 
+
+        final_t.Concatenate(pre_vtk_mat)  # pre-registration 
+        final_t.Concatenate(user_t)       # user-applied 
         self.transform.DeepCopy(final_t) 
-        self.user_transform.DeepCopy(user_t) 
+        self._update_sitk_transform()
+
+        # Apply transform visually
         self.reslice3d.SetResliceAxes(self.transform.GetMatrix()) 
         self.reslice3d.Modified() 
-        self._update_sitk_transform(orientation, slice_idx)
         self._blend_dirty = True 
 
 
@@ -1018,13 +828,10 @@ class Controller(QtCore.QObject):
         self.ui.coloring_checkbox.stateChanged.connect(self._on_coloring_checkbox_changed)
 
     def _handle_slider_change(self, slider_name):
-        # If the active slider changes, bake the current transform into the moving image.
-        if self._last_active_slider is not None and self._last_active_slider != slider_name:
-            # Bake current transforms into the moving image so VTK treats them as part of the voxel data.
-            self.engine.bake_user_transform_into_moving()
-            # Reset the on-screen transform sliders because their effect is now baked.
-            self.reset_transform_sliders()
-
+        # If the active slider changes, bake the current transform
+        #if self._last_active_slider is not None and self._last_active_slider != slider_name:
+            # call bake transform once added here
+            # self.reset_transform_sliders()
         self._last_active_slider = slider_name
         self._update_transform()
 
